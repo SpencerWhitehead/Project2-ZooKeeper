@@ -1,6 +1,6 @@
 /**
  * Spencer Whitehead, whites5
- * Vipula Rawte, rawtev
+ * Partha Sarathi Mukherjee, mukhep
  */
 
 /* Class to store IP address and port of a node. */
