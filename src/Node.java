@@ -291,7 +291,7 @@ public class Node {
         return  addrs;
     }
 
-    /* Parse tree file and initialize data structure to store neighboring nodes. */
+    /* Initialize data structure to store neighboring nodes. */
     public void initializeNeighbors(HashMap<Integer, AddrPair> addrs) { neighbors = addrs; }
 
     public static void main(String[] args) throws Exception {
