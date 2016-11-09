@@ -21,9 +21,13 @@ import java.util.concurrent.Executors;
 public class Node {
     private int portNum;	// Port number on which node will be listening to accept connections
     private int ID;	        // ID of node
-    private HashMap<Integer, AddrPair> neighbors = new HashMap<>(); // Map to store IP addresses and port numbers of neighbor nodes.
+    private HashMap<Integer, AddrPair> neighbors = new HashMap<>(); // Map to store IP addresses and
+                                                                    // port numbers of neighbor nodes.
+    private ConcurrentHashMap<Integer, Socket> connections = new ConcurrentHashMap<>();
     private ConcurrentHashMap<String, Token> tokens = new ConcurrentHashMap<>(); // Map to store token objects.
-    private ConcurrentHashMap<String, Queue<String[]>> commands = new ConcurrentHashMap<>(); // Map to store what commands should be ran on each file.
+    private ConcurrentHashMap<String, Queue<String[]>> commands = new ConcurrentHashMap<>(); // Map to
+                                                                                            // store what commands
+                                                                                            // should be ran on each file.
 
     public Node(int port, int ident) {
         this.portNum = port;
@@ -177,71 +181,17 @@ public class Node {
         }
     }
 
-    /* Class to handle incoming commands. */
-    public class CommandHandler implements Runnable {
-        String command;
-
-        public CommandHandler(String newCom) {command = newCom;}
-
-        /* Add command to command queue for file. */
-        public void addCommand(String fname, String[] com) {
-            if (Node.this.tokens.containsKey(fname)) {
-                if (Node.this.commands.containsKey(fname)) {
-                    Queue<String[]> q = Node.this.commands.get(fname);
-                    q.add(com);
-                    Node.this.commands.put(fname, q);
-                } else {
-                    Queue<String[]> q = new ConcurrentLinkedQueue<>();
-                    q.add(com);
-                    Node.this.commands.put(fname, q);
-                }
-            }
-        }
-
-        /* Parse and handle command. */
-        public void run(){
-            String[] com = parseCommand(command);
-            /* If create is command, then try to create file. */
-            if(com.length == 2 && com[0].equals("create")) {
-                runCommand(com[0], com[1], null);
-            }
-            else {
-                    /* Otherwise, request token. */
-                addCommand(com[1], com);
-            }
-        }
-    }
-
-    /* Parse and create thread to handle command. */
-    public void takeCommand(String command){
-        String[] com = parseCommand(command);
-        if(validateCommand(com[0]) && (com.length == 2 || com.length == 3)){
-            Thread commandThread = new Thread(new CommandHandler(command));
-            commandThread.run();
-        }
-        else {
-            System.err.println("\tInvalid command: "+command);
-        }
-    }
-
     /* Class to handle incoming messages. */
     public class ConnectHandler implements Runnable {
         private Socket socket = null; // Socket of incoming connection.
         private BufferedReader is = null; // Buffer to read incoming message.
+        private PrintWriter os = null;
 
         public ConnectHandler(Socket socket) {this.socket = socket;}
 
         /* Parse incoming message. */
         private String[] parseMsg(String msg){ return msg.split("\\|",4); }
 
-        /* Handle when a token is received. */
-        private void onTokReceipt(String fname, String data) {
-            Token t = tokens.get(fname);
-            t.setContents(data);
-            t.setHolder(ID);
-            tokens.put(fname, t);
-            Node.this.sendRequest(fname);
-        }
 
         /* Parse and perform actions based on message. */
         private void handleMsg(String msg) {
@@ -268,7 +218,6 @@ public class Node {
                 /* If TOK is keyword, then handle token. */
                 case "TOK":
                     System.out.println("\tReceived token: "+m[2]);
-                    onTokReceipt(m[2], m[3]);
                     break;
                 default:
                     System.err.println("\tInvalid message: "+msg);
@@ -277,15 +226,25 @@ public class Node {
         }
 
         /* Read in and handle message. */
-        public void run(){
+        public void run() {
             try {
                 is = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-                String msg = is.readLine();
-                System.out.println("\tReceived: "+msg);
-                handleMsg(msg);
+                os = new PrintWriter(socket.getOutputStream(), true);
+                while (true) {
+                    String msg = is.readLine();
+                    if(msg == null) {
+                        break;
+                    }
+                    System.out.println("\tReceived: " + msg);
+//                    handleMsg(msg);
+                    os.println("GOT IT!");
+//                    Thread.sleep(4);
+                }
                 is.close();
-                socket.close();
+                os.close();
+                System.out.println("LOST CLIENT CONNECTION");
             }
+//            catch (IOException|InterruptedException e){
             catch (IOException e){
                 System.err.println(e);
             }
@@ -294,27 +253,25 @@ public class Node {
 
     /* Start server and accept connections. Each connection is handled in a thread. */
     public void begin() {
-
-        final ExecutorService clientProcessingPool = Executors.newFixedThreadPool(20);
-
-        Runnable serverTask = new Runnable() {
-            @Override
-            public void run() {
-
-                try {
-                    ServerSocket serverSocket = new ServerSocket(portNum);
-
-                    while (true) {
-                        Socket clientSocket = serverSocket.accept();
-                        clientProcessingPool.submit(new ConnectHandler(clientSocket));
-                    }
-                } catch (IOException e) {
-                    System.err.println("Accept failed.");
+        try {
+            for(Map.Entry<Integer, AddrPair> entry : neighbors.entrySet()) {
+                if(entry.getKey() < ID) {
+                    AddrPair loc = entry.getValue();
+                    Socket sock = new Socket(loc.addr, loc.port);
+                    Thread connThread = new Thread(new ConnectHandler(sock));
+                    connThread.start();
                 }
             }
-        };
-        Thread serverThread = new Thread(serverTask);
-        serverThread.start();
+            ServerSocket serverSocket = new ServerSocket(portNum);
+            while(true) {
+                Socket sock = serverSocket.accept();
+                Thread connThread = new Thread(new ConnectHandler(sock));
+                connThread.start();
+            }
+        }
+        catch(IOException e){
+            System.err.println(e);
+        }
     }
 
     /* Parse configuration file with node IP addresses and ports. */
@@ -335,49 +292,18 @@ public class Node {
     }
 
     /* Parse tree file and initialize data structure to store neighboring nodes. */
-    public void initializeNeighbors(String fname, HashMap<Integer, AddrPair> addrs) {
-        HashMap<Integer, AddrPair> adj = new HashMap<>();
-        try (BufferedReader br = new BufferedReader(new FileReader(fname))) {
-            String line;
-            while ((line = br.readLine()) != null) {
-                String[] s = line.split(",");
-                String temp1 = s[0].replace("(","");
-                String temp2 = s[1].replace(")","");
-                int nodeID1 = Integer.parseInt(temp1);
-                int nodeID2 = Integer.parseInt(temp2);
-                if(nodeID1 == ID || nodeID2 == ID) {
-                    int neigh = nodeID1 != ID ? nodeID1 : nodeID2;
-                    adj.put(neigh, addrs.get(neigh));
-                }
-            }
-        }
-        catch (IOException e) {
-            System.err.println(e);
-        }
-        neighbors = adj;
-    }
+    public void initializeNeighbors(HashMap<Integer, AddrPair> addrs) { neighbors = addrs; }
 
     public static void main(String[] args) throws Exception {
-        if(args.length != 3) {
-            System.out.println("Arguments: <current node id> <tree file> <configuration file>");
+        if(args.length != 2) {
+            System.out.println("Arguments: <current node id> <configuration file>");
             System.exit(0);
         }
 
         int id = Integer.parseInt(args[0]);
-        HashMap<Integer, AddrPair> temp = parseConfigFile(args[2]);
+        HashMap<Integer, AddrPair> temp = parseConfigFile(args[1]);
         Node n = new Node(temp.get(id).port, id);
-        n.initializeNeighbors(args[1], temp);
+        n.initializeNeighbors(temp);
         n.begin();
-
-        Scanner scan = new Scanner(System.in);
-        String com = scan.nextLine();
-        while(!com.equals("quit")){
-            n.takeCommand(com);
-            com = scan.nextLine();
-        }
-        scan.close();
-        if(com.equals("quit")){
-            System.exit(0);
-        }
     }
 }
