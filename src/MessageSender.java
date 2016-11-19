@@ -5,6 +5,7 @@
 
 import java.io.*;
 import java.net.Socket;
+import java.util.ArrayList;
 
 /* Class for formatting and sending message between nodes. */
 public class MessageSender {
@@ -22,6 +23,16 @@ public class MessageSender {
         s.append("|");
         if (data != null){
             s.append(data);
+        }
+        return s.toString();
+    }
+
+    public static String formatMsg(ArrayList<String> contents) {
+        StringBuilder s = new StringBuilder();
+        int i;
+        for(i=0; i<contents.size(); i++) {
+            s.append(contents.get(i));
+            s.append("|");
         }
         return s.toString();
     }
