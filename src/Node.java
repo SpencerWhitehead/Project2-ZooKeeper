@@ -3,6 +3,7 @@
  * Partha Sarathi Mukherjee, mukhep
  */
 
+import java.awt.*;
 import java.io.*;
 import java.net.InetAddress;
 import java.net.ServerSocket;
@@ -21,9 +22,11 @@ public class Node {
     private int portNum;	// Port number on which node will be listening to accept connections
     private int ID;	        // ID of node
     private int leaderID;
+    private String initSend;
     private HashMap<Integer, AddrPair> neighbors = new HashMap<>(); // Map to store IP addresses and
                                                                     // port numbers of neighbor nodes.
 //    private ConcurrentHashMap<Integer, Socket> connections = new ConcurrentHashMap<>();
+
     private ConcurrentSkipListSet<Integer> activeParticipants = new ConcurrentSkipListSet<>();
     private ConcurrentHashMap<String, Token> tokens = new ConcurrentHashMap<>(); // Map to store token objects.
     private ConcurrentHashMap<String, Queue<String[]>> commands = new ConcurrentHashMap<>(); // Map to
@@ -33,6 +36,11 @@ public class Node {
     public Node(int port, int ident) {
         this.portNum = port;
         this.ID = ident;
+        StringBuilder s = new StringBuilder();
+        s.append("UP|");
+        s.append(ID);
+        s.append("|");
+        initSend = s.toString();
     }
 
     public int getNodeID(String addr, int port) {
@@ -197,7 +205,6 @@ public class Node {
         private BufferedReader is = null; // Buffer to read incoming message.
         private PrintWriter os = null;
         private int connID = -1;
-        private ArrayList<String> initSend = new ArrayList<>(Arrays.asList("UP", Integer.toString(Node.this.ID)));
         public ConnectHandler(Socket socket) {this.socket = socket;}
 
 //        /* Parse incoming message. */
@@ -259,7 +266,7 @@ public class Node {
             try {
                 is = new BufferedReader(new InputStreamReader(socket.getInputStream()));
                 os = new PrintWriter(socket.getOutputStream(), true);
-                os.println(MessageSender.formatMsg(initSend));
+                os.println(initSend);
                 while (true) {
                     String msg = is.readLine();
                     if(msg == null) {
@@ -287,26 +294,64 @@ public class Node {
     }
 
     /* Start server and accept connections. Each connection is handled in a thread. */
+//    public void begin() {
+//        try {
+//            AddrPair myLoc = neighbors.get(ID);
+//            for(Map.Entry<Integer, AddrPair> entry : neighbors.entrySet()) {
+//                if(entry.getKey() < ID) {
+//                    AddrPair loc = entry.getValue();
+//                    Socket sock = new Socket(loc.addr, loc.port);
+//                    Thread connThread = new Thread(new ConnectHandler(sock));
+//                    connThread.start();
+//                }
+//            }
+//            ServerSocket serverSocket = new ServerSocket(portNum);
+//            while(true) {
+//                Socket sock = serverSocket.accept();
+//                Thread connThread = new Thread(new ConnectHandler(sock));
+//                connThread.start();
+//            }
+//        }
+//        catch(IOException e){
+//            System.err.println(e);
+//        }
+//    }
     public void begin() {
-        try {
-            AddrPair myLoc = neighbors.get(ID);
-            for(Map.Entry<Integer, AddrPair> entry : neighbors.entrySet()) {
-                if(entry.getKey() < ID) {
-                    AddrPair loc = entry.getValue();
-                    Socket sock = new Socket(loc.addr, loc.port);
-                    Thread connThread = new Thread(new ConnectHandler(sock));
-                    connThread.start();
+        final ExecutorService clientProcessingPool = Executors.newFixedThreadPool(20);
+
+        Runnable serverTask = new Runnable() {
+            @Override
+            public void run() {
+
+                try {
+                    ServerSocket serverSocket = new ServerSocket(portNum);
+
+                    while (true) {
+                        Socket clientSocket = serverSocket.accept();
+                        clientProcessingPool.submit(new ConnectHandler(clientSocket));
+                    }
+                } catch (IOException e) {
+                    System.err.println("Accept failed.");
                 }
             }
-            ServerSocket serverSocket = new ServerSocket(portNum);
-            while(true) {
-                Socket sock = serverSocket.accept();
-                Thread connThread = new Thread(new ConnectHandler(sock));
-                connThread.start();
+        };
+        Thread serverThread = new Thread(serverTask);
+        serverThread.start();
+        AddrPair myLoc = neighbors.get(ID);
+        for(Map.Entry<Integer, AddrPair> entry : neighbors.entrySet()) {
+            if(entry.getKey() != ID) {
+                if (!activeParticipants.contains(entry.getKey())) {
+                    try {
+                        AddrPair loc = entry.getValue();
+                        Socket sock = new Socket(loc.addr, loc.port);
+                        Thread connThread = new Thread(new ConnectHandler(sock));
+                        connThread.start();
+                    }
+                    catch (IOException e) {
+                        System.err.println(e);
+                    }
+                }
             }
-        }
-        catch(IOException e){
-            System.err.println(e);
         }
     }
 
