@@ -4,13 +4,12 @@
  */
 
 import java.io.*;
+import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketAddress;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.*;
 
 /*
 *  Class to perform functionalities of a node in Raymond's algorithm.
@@ -21,9 +20,11 @@ import java.util.concurrent.Executors;
 public class Node {
     private int portNum;	// Port number on which node will be listening to accept connections
     private int ID;	        // ID of node
+    private int leaderID;
     private HashMap<Integer, AddrPair> neighbors = new HashMap<>(); // Map to store IP addresses and
                                                                     // port numbers of neighbor nodes.
-    private ConcurrentHashMap<Integer, Socket> connections = new ConcurrentHashMap<>();
+//    private ConcurrentHashMap<Integer, Socket> connections = new ConcurrentHashMap<>();
+    private ConcurrentSkipListSet<Integer> activeParticipants = new ConcurrentSkipListSet<>();
     private ConcurrentHashMap<String, Token> tokens = new ConcurrentHashMap<>(); // Map to store token objects.
     private ConcurrentHashMap<String, Queue<String[]>> commands = new ConcurrentHashMap<>(); // Map to
                                                                                             // store what commands
@@ -32,6 +33,15 @@ public class Node {
     public Node(int port, int ident) {
         this.portNum = port;
         this.ID = ident;
+    }
+
+    public int getNodeID(String addr, int port) {
+        for(Map.Entry<Integer, AddrPair> entry : neighbors.entrySet()) {
+            if (addr.equals(entry.getValue().addr) && port == entry.getValue().port) {
+                return entry.getKey();
+            }
+        }
+        return -1;
     }
 
     /* Create file. */
@@ -93,19 +103,19 @@ public class Node {
         }
     }
 
-    /* Send request to node with token from Raymond's algorithm. */
-    private void sendRequest(String fname) {
-        if(tokens.containsKey(fname)) {
-            Token t = tokens.get(fname);
-            if (t.getHolder() != ID && !t.isReqQEmpty() && !t.getAsked()) {
-                System.out.println("\tSending request for " + fname);
-                String msg = MessageSender.formatMsg("REQ", ID, fname, null);
-                MessageSender.sendMsg(neighbors.get(t.getHolder()).addr, neighbors.get(t.getHolder()).port, msg);
-                t.setAsked(true);
-                tokens.put(fname, t);
-            }
-        }
-    }
+//    /* Send request to node with token from Raymond's algorithm. */
+//    private void sendRequest(String fname) {
+//        if(tokens.containsKey(fname)) {
+//            Token t = tokens.get(fname);
+//            if (t.getHolder() != ID && !t.isReqQEmpty() && !t.getAsked()) {
+//                System.out.println("\tSending request for " + fname);
+//                String msg = MessageSender.formatMsg("REQ", ID, fname, null);
+//                MessageSender.sendMsg(neighbors.get(t.getHolder()).addr, neighbors.get(t.getHolder()).port, msg);
+//                t.setAsked(true);
+//                tokens.put(fname, t);
+//            }
+//        }
+//    }
 
     /* Send message to all neighbors. */
     private void relayToNeighbors(String command, String fname, int prevID){
@@ -186,12 +196,15 @@ public class Node {
         private Socket socket = null; // Socket of incoming connection.
         private BufferedReader is = null; // Buffer to read incoming message.
         private PrintWriter os = null;
-
+        private int connID = -1;
+        private ArrayList<String> initSend = new ArrayList<>(Arrays.asList("UP", Integer.toString(Node.this.ID)));
         public ConnectHandler(Socket socket) {this.socket = socket;}
 
-        /* Parse incoming message. */
-        private String[] parseMsg(String msg){ return msg.split("\\|",4); }
+//        /* Parse incoming message. */
+//        private String[] parseMsg(String msg){ return msg.split("\\|",4); }
 
+        /* Parse incoming message. */
+        private String[] parseMsg(String msg){ return msg.split("\\|"); }
 
         /* Parse and perform actions based on message. */
         private void handleMsg(String msg) {
@@ -212,12 +225,28 @@ public class Node {
                     }
                     break;
                 /* If REQ is keyword, then request token. */
-                case "REQ":
+                case "APP":
                     System.out.println("\tReceived request for file: "+m[2]);
                     break;
                 /* If TOK is keyword, then handle token. */
-                case "TOK":
+                case "RED":
                     System.out.println("\tReceived token: "+m[2]);
+                    break;
+                case "ELE":
+                    System.out.println("Received election message from: "+m[1]);
+                    break;
+                case "COR":
+                    System.out.println("Received coordinator message from: "+m[1]);
+                    break;
+                case "OKA":
+                    System.out.println("Received OK message from: "+m[1]);
+                    break;
+                case "UP":
+                    connID = Integer.parseInt(m[1]);
+                    if(!Node.this.activeParticipants.contains(connID)) {
+                        Node.this.activeParticipants.add(connID);
+                        System.out.println("Added NodeID "+connID+" to active participants");
+                    }
                     break;
                 default:
                     System.err.println("\tInvalid message: "+msg);
@@ -230,19 +259,25 @@ public class Node {
             try {
                 is = new BufferedReader(new InputStreamReader(socket.getInputStream()));
                 os = new PrintWriter(socket.getOutputStream(), true);
+                os.println(MessageSender.formatMsg(initSend));
                 while (true) {
                     String msg = is.readLine();
                     if(msg == null) {
                         break;
                     }
                     System.out.println("\tReceived: " + msg);
-//                    handleMsg(msg);
-                    os.println("GOT IT!");
+                    handleMsg(msg);
+//                    os.println("GOT IT!");
 //                    Thread.sleep(4);
                 }
                 is.close();
                 os.close();
                 System.out.println("LOST CLIENT CONNECTION");
+                if (connID != -1) {
+                    Node.this.activeParticipants.remove(connID);
+                    System.out.println(Node.this.activeParticipants.size());
+                    /* If connID == leaderID, then initiate leader election */
+                }
             }
 //            catch (IOException|InterruptedException e){
             catch (IOException e){
@@ -254,6 +289,7 @@ public class Node {
     /* Start server and accept connections. Each connection is handled in a thread. */
     public void begin() {
         try {
+            AddrPair myLoc = neighbors.get(ID);
             for(Map.Entry<Integer, AddrPair> entry : neighbors.entrySet()) {
                 if(entry.getKey() < ID) {
                     AddrPair loc = entry.getValue();
