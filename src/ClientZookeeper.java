@@ -45,7 +45,7 @@ public class ClientZookeeper
     {
         try 
         {
-            String[] tokens = line.split(" ");
+            String[] tokens = line.split(" ",3);
             if(tokens[0].equalsIgnoreCase("exit"))
             {
                 this.soc.close();   
@@ -58,7 +58,16 @@ public class ClientZookeeper
             
             OutputStreamWriter osw = new OutputStreamWriter(bos, "US-ASCII");                            
             
-            osw.write(line+"\n");
+            StringBuilder st = new StringBuilder();
+            if(tokens[0].equalsIgnoreCase("create"))    st.append("NEW|");
+            if(tokens[0].equalsIgnoreCase("read"))    st.append("RED|");
+            if(tokens[0].equalsIgnoreCase("append"))    st.append("APP|");
+            if(tokens[0].equalsIgnoreCase("delete"))    st.append("DEL|");
+            
+            st.append(tokens[1]+"|");
+            if(tokens.length > 2)   st.append(tokens[2]);
+            
+            osw.write(st.toString()+"\n");
             osw.flush();
         } 
         catch(Exception e) 
