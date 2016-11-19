@@ -37,6 +37,28 @@ public class MessageSender {
         return s.toString();
     }
 
+    public static String formatMsg(String[] contents) {
+        StringBuilder s = new StringBuilder();
+        int i;
+        for(i=0; i<contents.length; i++) {
+            s.append(contents[i]);
+            s.append("|");
+        }
+        return s.toString();
+    }
+
+    public synchronized static void sendMsg(Socket sock, String msg) {
+        try {
+            PrintStream os = new PrintStream(sock.getOutputStream());
+            os.println(msg);
+//            os.close();
+        }
+        catch (IOException e) {
+            System.err.println("INSIDE THE SEND MSG FUNCTION");
+            System.err.println(e);
+        }
+    }
+
     /* Send message to other node. */
     public static void sendMsg(String receiverIP, int receiverPort, String msg){
         try {
@@ -47,6 +69,7 @@ public class MessageSender {
             socket.close();
         }
         catch (IOException e) {
+            System.err.println("INSIDE THE SEND MSG FUNCTION");
             System.err.println(e);
         }
     }
