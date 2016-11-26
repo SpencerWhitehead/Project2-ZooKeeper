@@ -3,7 +3,6 @@
  * Partha Sarathi Mukherjee, mukhep
  */
 
-import java.awt.*;
 import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -27,7 +26,6 @@ public class Node {
     private HashMap<Integer, AddrPair> neighbors = new HashMap<>(); // Map to store IP addresses and
                                                                     // port numbers of neighbor nodes.
     private ConcurrentHashMap<Integer, Socket> connections = new ConcurrentHashMap<>();
-//    private ConcurrentSkipListSet<Integer> activeParticipants = new ConcurrentSkipListSet<>();
     private ConcurrentHashMap<String, Token> tokens = new ConcurrentHashMap<>(); // Map to store token objects.
     private ConcurrentHashMap<String, Queue<String[]>> commands = new ConcurrentHashMap<>(); // Map to
                                                                                             // store what commands
@@ -42,15 +40,6 @@ public class Node {
         s.append("|");
         initSend = s.toString();
         elect = new Election();
-    }
-
-    public int getNodeID(String addr, int port) {
-        for(Map.Entry<Integer, AddrPair> entry : neighbors.entrySet()) {
-            if (addr.equals(entry.getValue().addr) && port == entry.getValue().port) {
-                return entry.getKey();
-            }
-        }
-        return -1;
     }
 
     /* Create file. */
@@ -176,7 +165,6 @@ public class Node {
             try {
                 leaderID = nodeID;
                 elect.setCoord(leaderID);
-//                System.out.println("NEW LEADER IS: " + Integer.toString(leaderID));
                 Thread.sleep(2600);
                 System.out.println("NEW LEADER IS: " + Integer.toString(leaderID));
                 elect.endElection();
@@ -195,9 +183,7 @@ public class Node {
             switch (msg[0]) {
                 case "ELE":
                     int n = Integer.parseInt(msg[1]);
-                    if (n < ID && !elect.ongoingElection()) {
-                        onElectRecv(n);
-                    }
+                    Node.this.onElectRecv(n);
                     break;
                 case "COR":
                     Node.this.onCoordRecv(Integer.parseInt(msg[1]));
@@ -216,7 +202,6 @@ public class Node {
         private PrintWriter os = null;
         private int connID = -1;
         public ConnectHandler(Socket sock) { socket = sock; }
-
 
         /* Parse incoming message. */
         private String[] parseMsg(String msg){ return msg.split("\\|"); }
@@ -324,7 +309,6 @@ public class Node {
                         Socket clientSocket = serverSocket.accept();
                         Thread clientThread = new Thread(new ConnectHandler(clientSocket));
                         clientThread.start();
-//                        clientProcessingPool.submit(new ConnectHandler(clientSocket));
                     }
                 } catch (IOException e) {
                     System.err.println("Accept failed.");
@@ -333,7 +317,6 @@ public class Node {
         };
         Thread serverThread = new Thread(serverTask);
         serverThread.start();
-        AddrPair myLoc = neighbors.get(ID);
         for(Map.Entry<Integer, AddrPair> entry : neighbors.entrySet()) {
             if(entry.getKey() != ID) {
                 if (!connections.containsKey(entry.getKey())) {
