@@ -34,13 +34,19 @@ public class ClientThread implements Runnable
             {
                 String line = input.readLine();
                 if(line == null)    break;
+                if(line.length()<2) continue;
+                char c1 = line.charAt(0);
+                char c2 = line.charAt(1);
+                if(c1=='U'&&c2=='P') continue;
                 System.out.println(line);
             }
+            System.out.println("Server has shut down");
+            System.exit(-1);
         }             
 
         catch(Exception e) 
         {
-            e.printStackTrace();   
+            
         }
         
     }
