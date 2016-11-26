@@ -5,10 +5,8 @@
 
 import java.awt.*;
 import java.io.*;
-import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.net.SocketAddress;
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -22,6 +20,8 @@ public class Node {
     private int portNum;	// Port number on which node will be listening to accept connections
     private int ID;	        // ID of node
     private int leaderID = -1;
+    private int epoch = 0;
+    private int counter = 0;
     private String initSend;
     private Election elect;
     private HashMap<Integer, AddrPair> neighbors = new HashMap<>(); // Map to store IP addresses and
@@ -42,7 +42,6 @@ public class Node {
         s.append("|");
         initSend = s.toString();
         elect = new Election();
-//        elect = new Election();
     }
 
     public int getNodeID(String addr, int port) {
@@ -53,26 +52,6 @@ public class Node {
         }
         return -1;
     }
-
-    private int getNumIDBelow() {
-        int smallest = ID;
-        for(Map.Entry<Integer, AddrPair> entry : neighbors.entrySet()) {
-            if(entry.getKey() < smallest) {
-                smallest = entry.getKey();
-            }
-        }
-        return smallest;
-    }
-
-//    private int getMinID() {
-//        int smallest = ID;
-//        for(Map.Entry<Integer, AddrPair> entry : neighbors.entrySet()) {
-//            if(entry.getKey() < smallest) {
-//                smallest = entry.getKey();
-//            }
-//        }
-//        return smallest;
-//    }
 
     /* Create file. */
     private void createFile(String fname, int nodeID) {
@@ -131,15 +110,6 @@ public class Node {
         }
     }
 
-//    private void sendToHigherIDs(ArrayList<String> contents) {
-//        String msg = MessageSender.formatMsg(contents);
-//        for(Map.Entry<Integer, AddrPair> entry : neighbors.entrySet()) {
-//            if(entry.getKey() > ID) {
-//                MessageSender.sendMsg(connections.get(entry.getKey()), msg);
-//            }
-//        }
-//    }
-
     private boolean toSend(int nodeID, int criteria) {
         if (criteria == 1) { return nodeID > ID; }
         else if (criteria == -1) { return nodeID < ID; }
@@ -168,7 +138,7 @@ public class Node {
         }
     }
 
-    private synchronized void initElection(){
+    private void initElection(){
         System.out.println("ATTEMPTING ELECTION");
         elect.holdElection();
         sendToNodes(new String[] {"ELE", Integer.toString(ID)}, 0, 1);
@@ -179,14 +149,11 @@ public class Node {
                 leaderID = ID;
                 sendToNodes(new String[] {"COR", Integer.toString(ID)}, 0, -1);
                 elect.endElection();
-//                elect.endElection(ID-getMinID());
             }
             else {
-                Thread.sleep(10000);
+                Thread.sleep(1500);
                 if(elect.recvdCoord()) {
                     leaderID = elect.getCoord();
-//                    elect.endElection();
-//                    elect.endElection(ID-getMinID());
                 }
                 else { initElection(); }
             }
@@ -197,20 +164,26 @@ public class Node {
         }
     }
 
-    private synchronized void onElectRecv(int nodeID) {
+    private void onElectRecv(int nodeID) {
         System.out.println("SENDING OKAY MESSAGE");
         sendToNodes(new String[] {"OKA", Integer.toString(ID)}, nodeID, -2);
         if(!elect.ongoingElection()) { initElection(); }
     }
 
-    private synchronized void onCoordRecv(int nodeID) {
+    private void onCoordRecv(int nodeID) {
         if(ID > nodeID && !elect.ongoingElection()) { initElection(); }
         else {
-            leaderID = nodeID;
-            elect.setCoord(leaderID);
-            System.out.println("NEW LEADER IS: "+Integer.toString(leaderID));
-            elect.endElection();
-//            elect.endElection(ID-getMinID());
+            try {
+                leaderID = nodeID;
+                elect.setCoord(leaderID);
+//                System.out.println("NEW LEADER IS: " + Integer.toString(leaderID));
+                Thread.sleep(2600);
+                System.out.println("NEW LEADER IS: " + Integer.toString(leaderID));
+                elect.endElection();
+            }
+            catch (InterruptedException e) {
+                e.printStackTrace();
+            }
         }
     }
 
@@ -219,26 +192,20 @@ public class Node {
         public ElectHandler(String[] m) { msg = m; }
 
         public void run() {
-//            if(leaderID == -1) {
-                switch (msg[0]) {
-                    case "ELE":
-//                    System.out.println("Received election message from: "+msg[1]);
-                        int n = Integer.parseInt(msg[1]);
-//                        Node.this.elect.addElectHolder();
-                        if (n < ID) {
-                            onElectRecv(n);
-                        }
-                        break;
-                    case "COR":
-//                    System.out.println("Received coordinator message from: "+msg[1]);
-                        Node.this.onCoordRecv(Integer.parseInt(msg[1]));
-                        break;
-                    case "OKA":
-//                    System.out.println("Received OK message from: "+msg[1]);
-                        Node.this.elect.addOkay(Integer.parseInt(msg[1]));
-                        break;
-                }
-//            }
+            switch (msg[0]) {
+                case "ELE":
+                    int n = Integer.parseInt(msg[1]);
+                    if (n < ID && !elect.ongoingElection()) {
+                        onElectRecv(n);
+                    }
+                    break;
+                case "COR":
+                    Node.this.onCoordRecv(Integer.parseInt(msg[1]));
+                    break;
+                case "OKA":
+                    Node.this.elect.addOkay(Integer.parseInt(msg[1]));
+                    break;
+            }
         }
     }
 
@@ -250,8 +217,6 @@ public class Node {
         private int connID = -1;
         public ConnectHandler(Socket sock) { socket = sock; }
 
-//        /* Parse incoming message. */
-//        private String[] parseMsg(String msg){ return msg.split("\\|",4); }
 
         /* Parse incoming message. */
         private String[] parseMsg(String msg){ return msg.split("\\|"); }
@@ -286,21 +251,16 @@ public class Node {
                     System.out.println("Received election message from: "+m[1]);
                     Thread electThread = new Thread(new ElectHandler(m));
                     electThread.start();
-//                    int n = Integer.parseInt(m[1]);
-//                    Node.this.elect.addElectHolder();
-//                    if(n < ID) { onElectRecv(n); }
                     break;
                 case "COR":
                     System.out.println("Received coordinator message from: "+m[1]);
                     electThread = new Thread(new ElectHandler(m));
                     electThread.start();
-//                    Node.this.onCoordRecv(Integer.parseInt(m[1]));
                     break;
                 case "OKA":
                     System.out.println("Received OK message from: "+m[1]);
                     electThread = new Thread(new ElectHandler(m));
                     electThread.start();
-//                    Node.this.elect.addOkay(Integer.parseInt(m[1]));
                     break;
                 case "UP":
                     connID = Integer.parseInt(m[1]);
@@ -308,10 +268,6 @@ public class Node {
                         Node.this.connections.put(connID, socket);
                         System.out.println("Added NodeID "+connID+" to connections");
                     }
-//                    if(!Node.this.activeParticipants.contains(connID)) {
-//                        Node.this.activeParticipants.add(connID);
-//                        System.out.println("Added NodeID "+connID+" to active participants");
-//                    }
                     break;
                 default:
                     System.err.println("\tInvalid message: "+msg);
@@ -325,8 +281,6 @@ public class Node {
                 is = new BufferedReader(new InputStreamReader(socket.getInputStream()));
                 os = new PrintWriter(socket.getOutputStream(), true);
                 os.println(initSend);
-//                os.close();
-//                boolean initElect = true;
                 while (true) {
                     String msg = is.readLine();
                     if(msg == null) {
@@ -334,13 +288,7 @@ public class Node {
                     }
                     System.out.println("\tReceived: " + msg);
                     handleMsg(msg);
-//                    if(initElect) {
-//                        initElect = false;
-//                        initElection();
-//                    }
                 }
-//                is.close();
-//                os.close();
                 if (connID != -1) {
                     System.out.println("LOST NODE CONNECTION TO "+Integer.toString(connID));
                     Node.this.connections.remove(connID);
@@ -350,14 +298,11 @@ public class Node {
                         leaderID = -1;
                         Node.this.initElection();
                     }
-//                    Node.this.activeParticipants.remove(connID);
-//                    System.out.println(Node.this.activeParticipants.size());
                 }
                 else {
                     System.out.println("LOST CLIENT CONNECTION");
                 }
             }
-//            catch (IOException|InterruptedException e){
             catch (IOException e){
                 System.err.println("Connection error (ConnectHandler):");
 //                e.printStackTrace();
@@ -367,31 +312,7 @@ public class Node {
     }
 
     /* Start server and accept connections. Each connection is handled in a thread. */
-//    public void begin() {
-//        try {
-//            AddrPair myLoc = neighbors.get(ID);
-//            for(Map.Entry<Integer, AddrPair> entry : neighbors.entrySet()) {
-//                if(entry.getKey() < ID) {
-//                    AddrPair loc = entry.getValue();
-//                    Socket sock = new Socket(loc.addr, loc.port);
-//                    Thread connThread = new Thread(new ConnectHandler(sock));
-//                    connThread.start();
-//                }
-//            }
-//            ServerSocket serverSocket = new ServerSocket(portNum);
-//            while(true) {
-//                Socket sock = serverSocket.accept();
-//                Thread connThread = new Thread(new ConnectHandler(sock));
-//                connThread.start();
-//            }
-//        }
-//        catch(IOException e){
-//            System.err.println(e);
-//        }
-//    }
     public void begin() {
-        final ExecutorService clientProcessingPool = Executors.newFixedThreadPool(20);
-
         Runnable serverTask = new Runnable() {
             @Override
             public void run() {
@@ -415,14 +336,12 @@ public class Node {
         AddrPair myLoc = neighbors.get(ID);
         for(Map.Entry<Integer, AddrPair> entry : neighbors.entrySet()) {
             if(entry.getKey() != ID) {
-//                if (!activeParticipants.contains(entry.getKey())) {
                 if (!connections.containsKey(entry.getKey())) {
                     try {
                         AddrPair loc = entry.getValue();
                         Socket sock = new Socket(loc.addr, loc.port);
                         connections.put(entry.getKey(),sock);
                         Thread connThread = new Thread(new ConnectHandler(connections.get(entry.getKey())));
-//                        Thread connThread = new Thread(new ConnectHandler(sock));
                         connThread.start();
                     }
                     catch (IOException e) {
