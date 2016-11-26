@@ -3,12 +3,9 @@
  * Partha Sarathi Mukherjee, mukhep
  */
 
-import java.awt.*;
 import java.io.*;
-import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.net.SocketAddress;
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -21,13 +18,14 @@ import java.util.concurrent.*;
 public class Node {
     private int portNum;	// Port number on which node will be listening to accept connections
     private int ID;	        // ID of node
-    private int leaderID;
+    private int leaderID = -1;
+    private int epoch = 0;
+    private int counter = 0;
     private String initSend;
+    private Election elect;
     private HashMap<Integer, AddrPair> neighbors = new HashMap<>(); // Map to store IP addresses and
                                                                     // port numbers of neighbor nodes.
-//    private ConcurrentHashMap<Integer, Socket> connections = new ConcurrentHashMap<>();
-
-    private ConcurrentSkipListSet<Integer> activeParticipants = new ConcurrentSkipListSet<>();
+    private ConcurrentHashMap<Integer, Socket> connections = new ConcurrentHashMap<>();
     private ConcurrentHashMap<String, Token> tokens = new ConcurrentHashMap<>(); // Map to store token objects.
     private ConcurrentHashMap<String, Queue<String[]>> commands = new ConcurrentHashMap<>(); // Map to
                                                                                             // store what commands
@@ -41,15 +39,7 @@ public class Node {
         s.append(ID);
         s.append("|");
         initSend = s.toString();
-    }
-
-    public int getNodeID(String addr, int port) {
-        for(Map.Entry<Integer, AddrPair> entry : neighbors.entrySet()) {
-            if (addr.equals(entry.getValue().addr) && port == entry.getValue().port) {
-                return entry.getKey();
-            }
-        }
-        return -1;
+        elect = new Election();
     }
 
     /* Create file. */
@@ -62,7 +52,6 @@ public class Node {
             s.append("\tNumber of tokens: ");
             s.append(tokens.size());
             System.out.println(s.toString());
-            relayToNeighbors("NEW", fname, nodeID); // Notify neighboring nodes.
         }
         else {
             System.err.println("\tError: file already exists, "+fname);
@@ -79,7 +68,6 @@ public class Node {
             s.append("\tNumber of tokens: ");
             s.append(tokens.size());
             System.out.println(s.toString());
-            relayToNeighbors("DEL", fname, nodeID); // Notify neighboring nodes.
         }
         else {
             System.err.println("\tError: no such file, "+fname);
@@ -111,104 +99,109 @@ public class Node {
         }
     }
 
-//    /* Send request to node with token from Raymond's algorithm. */
-//    private void sendRequest(String fname) {
-//        if(tokens.containsKey(fname)) {
-//            Token t = tokens.get(fname);
-//            if (t.getHolder() != ID && !t.isReqQEmpty() && !t.getAsked()) {
-//                System.out.println("\tSending request for " + fname);
-//                String msg = MessageSender.formatMsg("REQ", ID, fname, null);
-//                MessageSender.sendMsg(neighbors.get(t.getHolder()).addr, neighbors.get(t.getHolder()).port, msg);
-//                t.setAsked(true);
-//                tokens.put(fname, t);
-//            }
-//        }
-//    }
+    private boolean toSend(int nodeID, int criteria) {
+        if (criteria == 1) { return nodeID > ID; }
+        else if (criteria == -1) { return nodeID < ID; }
+        else if (criteria == 0) { return nodeID != ID; }
+        else { return false;}
+    }
 
-    /* Send message to all neighbors. */
-    private void relayToNeighbors(String command, String fname, int prevID){
-        String msg = MessageSender.formatMsg(command, ID, fname, null);
-        for(Map.Entry<Integer, AddrPair> entry : neighbors.entrySet()) {
-            if (!entry.getKey().equals(prevID)) {
-                StringBuilder s = new StringBuilder();
-                s.append("\tNotifying node ");
-                s.append(entry.getKey());
-                System.out.println(s.toString());
-                String addr = entry.getValue().addr;
-                int port = entry.getValue().port;
-                MessageSender.sendMsg(addr, port, msg);
+    /*
+    *  whichNdoes == 1 means send to nodes with higher IDs
+    *  whichNodes == 0 means send to all other nodes
+    *  whichNodes == -1 means send to nodes with lower IDs
+    *  whichNodes == -2 means send to only the node specified by nodeID
+    *  */
+    private void sendToNodes(String[] contents, int nodeID, int whichNodes) {
+        String msg = MessageSender.formatMsg(contents);
+        if(nodeID != 0 && whichNodes == -2 && connections.containsKey(nodeID)) {
+            System.out.println("ABOUT TO SEND " +contents[0]+" MESSAGE TO "+Integer.toString(nodeID));
+            MessageSender.sendMsg(connections.get(nodeID), msg);
+        }
+        else {
+            for (Map.Entry<Integer, AddrPair> entry : neighbors.entrySet()) {
+                if (toSend(entry.getKey(), whichNodes) && connections.containsKey(entry.getKey())) {
+                    MessageSender.sendMsg(connections.get(entry.getKey()), msg);
+                }
             }
         }
     }
 
-    /* Determine if incoming command is valid. */
-    private boolean validateCommand(String command) {
-        boolean valid = false;
-        switch (command){
-            /* If create is command, then it is valid. */
-            case "create":
-                valid = true;
-                break;
-            /* If delete is command, then it is valid. */
-            case "delete":
-                valid = true;
-                break;
-            /* If read is command, then it is valid. */
-            case "read":
-                valid = true;
-                break;
-            /* If append is command, then it is valid. */
-            case "append":
-                valid = true;
-                break;
-            default:
-                break;
-        }
-        return valid;
-    }
-
-    /* Parse incoming command. */
-    private String[] parseCommand(String com){
-        return com.split("\\s",3);
-    }
-
-    /* Execute a given command on token. */
-    private void runCommand(String command, String fname, String contents){
-        switch (command){
-            /* If create is command, then create file. */
-            case "create":
-                createFile(fname, ID);
-                break;
-            /* If delete is command, then delete file. */
-            case "delete":
-                deleteFile(fname, ID);
-                break;
-            /* If read is command, then read file. */
-            case "read":
-                readFile(fname);
-                break;
-            /* If append is command, then append to file. */
-            case "append":
-                if(contents != null) {
-                    appendFile(fname, contents);
+    private void initElection(){
+        System.out.println("ATTEMPTING ELECTION");
+        elect.holdElection();
+        sendToNodes(new String[] {"ELE", Integer.toString(ID)}, 0, 1);
+        try {
+            Thread.sleep(1000);
+            if(elect.getNumOkays() == 0) {
+                System.out.println("No responses... Guess I'm the leader");
+                leaderID = ID;
+                sendToNodes(new String[] {"COR", Integer.toString(ID)}, 0, -1);
+                elect.endElection();
+            }
+            else {
+                Thread.sleep(1500);
+                if(elect.recvdCoord()) {
+                    leaderID = elect.getCoord();
                 }
-                break;
-            default:
-                System.err.println("\tInvalid command: "+command);
-                break;
+                else { initElection(); }
+            }
+        }
+        catch (InterruptedException e) {
+            System.err.println("Initiate election error:");
+            System.err.println(e);
+        }
+    }
+
+    private void onElectRecv(int nodeID) {
+        System.out.println("SENDING OKAY MESSAGE");
+        sendToNodes(new String[] {"OKA", Integer.toString(ID)}, nodeID, -2);
+        if(!elect.ongoingElection()) { initElection(); }
+    }
+
+    private void onCoordRecv(int nodeID) {
+        if(ID > nodeID && !elect.ongoingElection()) { initElection(); }
+        else {
+            try {
+                leaderID = nodeID;
+                elect.setCoord(leaderID);
+                Thread.sleep(2600);
+                System.out.println("NEW LEADER IS: " + Integer.toString(leaderID));
+                elect.endElection();
+            }
+            catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    private class ElectHandler implements Runnable {
+        private String[] msg;
+        public ElectHandler(String[] m) { msg = m; }
+
+        public void run() {
+            switch (msg[0]) {
+                case "ELE":
+                    int n = Integer.parseInt(msg[1]);
+                    Node.this.onElectRecv(n);
+                    break;
+                case "COR":
+                    Node.this.onCoordRecv(Integer.parseInt(msg[1]));
+                    break;
+                case "OKA":
+                    Node.this.elect.addOkay(Integer.parseInt(msg[1]));
+                    break;
+            }
         }
     }
 
     /* Class to handle incoming messages. */
-    public class ConnectHandler implements Runnable {
+    private class ConnectHandler implements Runnable {
         private Socket socket = null; // Socket of incoming connection.
         private BufferedReader is = null; // Buffer to read incoming message.
         private PrintWriter os = null;
         private int connID = -1;
-        public ConnectHandler(Socket socket) {this.socket = socket;}
-
-//        /* Parse incoming message. */
-//        private String[] parseMsg(String msg){ return msg.split("\\|",4); }
+        public ConnectHandler(Socket sock) { socket = sock; }
 
         /* Parse incoming message. */
         private String[] parseMsg(String msg){ return msg.split("\\|"); }
@@ -241,18 +234,24 @@ public class Node {
                     break;
                 case "ELE":
                     System.out.println("Received election message from: "+m[1]);
+                    Thread electThread = new Thread(new ElectHandler(m));
+                    electThread.start();
                     break;
                 case "COR":
                     System.out.println("Received coordinator message from: "+m[1]);
+                    electThread = new Thread(new ElectHandler(m));
+                    electThread.start();
                     break;
                 case "OKA":
                     System.out.println("Received OK message from: "+m[1]);
+                    electThread = new Thread(new ElectHandler(m));
+                    electThread.start();
                     break;
                 case "UP":
                     connID = Integer.parseInt(m[1]);
-                    if(!Node.this.activeParticipants.contains(connID)) {
-                        Node.this.activeParticipants.add(connID);
-                        System.out.println("Added NodeID "+connID+" to active participants");
+                    if(!Node.this.connections.containsKey(connID)) {
+                        Node.this.connections.put(connID, socket);
+                        System.out.println("Added NodeID "+connID+" to connections");
                     }
                     break;
                 default:
@@ -274,51 +273,31 @@ public class Node {
                     }
                     System.out.println("\tReceived: " + msg);
                     handleMsg(msg);
-//                    os.println("GOT IT!");
-//                    Thread.sleep(4);
                 }
-                is.close();
-                os.close();
-                System.out.println("LOST CLIENT CONNECTION");
                 if (connID != -1) {
-                    Node.this.activeParticipants.remove(connID);
-                    System.out.println(Node.this.activeParticipants.size());
+                    System.out.println("LOST NODE CONNECTION TO "+Integer.toString(connID));
+                    Node.this.connections.remove(connID);
+                    System.out.println(Node.this.connections.size());
                     /* If connID == leaderID, then initiate leader election */
+                    if(connID == leaderID) {
+                        leaderID = -1;
+                        Node.this.initElection();
+                    }
+                }
+                else {
+                    System.out.println("LOST CLIENT CONNECTION");
                 }
             }
-//            catch (IOException|InterruptedException e){
             catch (IOException e){
+                System.err.println("Connection error (ConnectHandler):");
+//                e.printStackTrace();
                 System.err.println(e);
             }
         }
     }
 
     /* Start server and accept connections. Each connection is handled in a thread. */
-//    public void begin() {
-//        try {
-//            AddrPair myLoc = neighbors.get(ID);
-//            for(Map.Entry<Integer, AddrPair> entry : neighbors.entrySet()) {
-//                if(entry.getKey() < ID) {
-//                    AddrPair loc = entry.getValue();
-//                    Socket sock = new Socket(loc.addr, loc.port);
-//                    Thread connThread = new Thread(new ConnectHandler(sock));
-//                    connThread.start();
-//                }
-//            }
-//            ServerSocket serverSocket = new ServerSocket(portNum);
-//            while(true) {
-//                Socket sock = serverSocket.accept();
-//                Thread connThread = new Thread(new ConnectHandler(sock));
-//                connThread.start();
-//            }
-//        }
-//        catch(IOException e){
-//            System.err.println(e);
-//        }
-//    }
     public void begin() {
-        final ExecutorService clientProcessingPool = Executors.newFixedThreadPool(20);
-
         Runnable serverTask = new Runnable() {
             @Override
             public void run() {
@@ -328,7 +307,8 @@ public class Node {
 
                     while (true) {
                         Socket clientSocket = serverSocket.accept();
-                        clientProcessingPool.submit(new ConnectHandler(clientSocket));
+                        Thread clientThread = new Thread(new ConnectHandler(clientSocket));
+                        clientThread.start();
                     }
                 } catch (IOException e) {
                     System.err.println("Accept failed.");
@@ -337,22 +317,25 @@ public class Node {
         };
         Thread serverThread = new Thread(serverTask);
         serverThread.start();
-        AddrPair myLoc = neighbors.get(ID);
         for(Map.Entry<Integer, AddrPair> entry : neighbors.entrySet()) {
             if(entry.getKey() != ID) {
-                if (!activeParticipants.contains(entry.getKey())) {
+                if (!connections.containsKey(entry.getKey())) {
                     try {
                         AddrPair loc = entry.getValue();
                         Socket sock = new Socket(loc.addr, loc.port);
-                        Thread connThread = new Thread(new ConnectHandler(sock));
+                        connections.put(entry.getKey(),sock);
+                        Thread connThread = new Thread(new ConnectHandler(connections.get(entry.getKey())));
                         connThread.start();
                     }
                     catch (IOException e) {
+                        System.err.println("Neighbor connection error: ");
                         System.err.println(e);
                     }
                 }
             }
         }
+        System.out.println("INITIALIZING ELECTION");
+        initElection();
     }
 
     /* Parse configuration file with node IP addresses and ports. */
