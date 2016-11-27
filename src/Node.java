@@ -43,9 +43,9 @@ public class Node {
     }
 
     /* Create file. */
-    private void createFile(String fname, int nodeID) {
+    private void createFile(String fname) {
         if (!tokens.containsKey(fname)) {
-            Token t = new Token(fname, nodeID);
+            Token t = new Token(fname);
             tokens.put(fname, t);
             System.out.println("\tCreated file: "+fname);
             StringBuilder s = new StringBuilder();
@@ -59,7 +59,7 @@ public class Node {
     }
 
     /* Delete file. */
-    private void deleteFile(String fname, int nodeID) {
+    private void deleteFile(String fname) {
         if (tokens.containsKey(fname)) {
             Token t = tokens.remove(fname);
             Queue q = commands.remove(fname);
@@ -115,7 +115,7 @@ public class Node {
     private void sendToNodes(String[] contents, int nodeID, int whichNodes) {
         String msg = MessageSender.formatMsg(contents);
         if(nodeID != 0 && whichNodes == -2 && connections.containsKey(nodeID)) {
-            System.out.println("ABOUT TO SEND " +contents[0]+" MESSAGE TO "+Integer.toString(nodeID));
+            System.out.println("ABOUT TO SEND " +msg+" MESSAGE TO "+Integer.toString(nodeID));
             MessageSender.sendMsg(connections.get(nodeID), msg);
         }
         else {
@@ -207,57 +207,64 @@ public class Node {
         private String[] parseMsg(String msg){ return msg.split("\\|"); }
 
         /* Parse and perform actions based on message. */
-        private void handleMsg(String msg) {
+        private void handleMsg(String msg) 
+        {
             String[] m = parseMsg(msg);
-            switch (m[0]){
-                /* If NEW is keyword, then create file. */
-                case "NEW":
-                    if(!Node.this.tokens.containsKey(m[2])) {
-                        System.out.println("\tCreating file: "+m[2]);
-                        Node.this.createFile(m[2], Integer.parseInt(m[1]));
-                    }
-                    break;
-                /* If DEL is keyword, then delete file. */
-                case "DEL":
-                    if(Node.this.tokens.containsKey(m[2])) {
-                        System.out.println("\tDeleting file: "+m[2]);
-                        Node.this.deleteFile(m[2], Integer.parseInt(m[1]));
-                    }
-                    break;
-                /* If REQ is keyword, then request token. */
-                case "APP":
-                    System.out.println("\tReceived request for file: "+m[2]);
-                    break;
-                /* If TOK is keyword, then handle token. */
-                case "RED":
-                    System.out.println("\tReceived token: "+m[2]);
-                    break;
-                case "ELE":
-                    System.out.println("Received election message from: "+m[1]);
-                    Thread electThread = new Thread(new ElectHandler(m));
-                    electThread.start();
-                    break;
-                case "COR":
-                    System.out.println("Received coordinator message from: "+m[1]);
-                    electThread = new Thread(new ElectHandler(m));
-                    electThread.start();
-                    break;
-                case "OKA":
-                    System.out.println("Received OK message from: "+m[1]);
-                    electThread = new Thread(new ElectHandler(m));
-                    electThread.start();
-                    break;
-                case "UP":
-                    connID = Integer.parseInt(m[1]);
-                    if(!Node.this.connections.containsKey(connID)) {
-                        Node.this.connections.put(connID, socket);
-                        System.out.println("Added NodeID "+connID+" to connections");
-                    }
-                    break;
-                default:
-                    System.err.println("\tInvalid message: "+msg);
-                    break;
+            if(leaderID != ID && (m[0].equalsIgnoreCase("NEW") || m[0].equalsIgnoreCase("DEL") || m[0].equalsIgnoreCase("APP")))
+                Node.this.sendToNodes(m,leaderID,-2);
+            
+            else
+            {
+                switch (m[0])
+                {
+                    /* If NEW is keyword, then create file. */
+                    case "NEW":
+                        System.out.println("\tCreating file: "+m[1]);
+                        Node.this.createFile(m[1]);
+                        break;
+                    /* If DEL is keyword, then delete file. */
+                    case "DEL":
+                        System.out.println("\tDeleting file: "+m[1]);
+                        Node.this.deleteFile(m[1]);
+                        break;
+                    /* If REQ is keyword, then request token. */
+                    case "APP":
+                        System.out.println("\tAppending to file: "+m[1]);
+                        Node.this.appendFile(m[1],m[2]);
+                        break;
+                    /* If TOK is keyword, then handle token. */
+                    case "RED":
+                        System.out.println("\tReading file: "+m[1]);
+                        Node.this.readFile(m[1]);
+                        break;
+                    case "ELE":
+                        System.out.println("Received election message from: "+m[1]);
+                        Thread electThread = new Thread(new ElectHandler(m));
+                        electThread.start();
+                        break;
+                    case "COR":
+                        System.out.println("Received coordinator message from: "+m[1]);
+                        electThread = new Thread(new ElectHandler(m));
+                        electThread.start();
+                        break;
+                    case "OKA":
+                        System.out.println("Received OK message from: "+m[1]);
+                        electThread = new Thread(new ElectHandler(m));
+                        electThread.start();
+                        break;
+                    case "UP":
+                        connID = Integer.parseInt(m[1]);
+                        if(!Node.this.connections.containsKey(connID)) {
+                            Node.this.connections.put(connID, socket);
+                            System.out.println("Added NodeID "+connID+" to connections");
+                        }
+                        break;
+                    default:
+                        System.err.println("\tInvalid message: "+msg);
+                        break;
+                }                
             }
+            
         }
 
         /* Read in and handle message. */
