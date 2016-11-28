@@ -180,14 +180,20 @@ public class Node {
             }
         }
     }    
-    
-    private void propose(String[] cts)
+
+    private synchronized void propose(String[] cts)
     {
-        ++this.counter;
         ArrayList<String> li = new ArrayList<>();
         li.add("PRO");  
         for(int i = 0; i < cts.length; ++i)     li.add(cts[i]);
         li.add(Integer.toString(this.epoch));   li.add(Integer.toString(this.counter));   
+        boolean b = isInvalid(MessageSender.formatMsg(li));        
+        if(b)
+        {
+            System.out.println("Write to Client: Error: Invalid command");
+            return;
+        }
+        ++this.counter;
         System.out.println("Sending following "+
         "proposal to all followers: " + MessageSender.formatMsg(li));
         sendToNodes(li,0,0);
@@ -204,18 +210,14 @@ public class Node {
         }
         try
         {
-            boolean b = isRepeated(msg);
-            if(!b)
-            {
-                PrintWriter out = null;
-                out = new PrintWriter(new BufferedWriter(new FileWriter(this.historyFile, true)));
-                out.print(ar[ar.length-2]+"|"+ar[ar.length-1]+"|"); 
-                for(int i = 1; i < ar.length-2;++i) 
-                    out.print(ar[i]+"|");
-                out.println();
-                out.flush();
-                out.close();               
-            }
+            PrintWriter out = null;
+            out = new PrintWriter(new BufferedWriter(new FileWriter(this.historyFile, true)));
+            out.print(ar[ar.length-2]+"|"+ar[ar.length-1]+"|"); 
+            for(int i = 1; i < ar.length-2;++i) 
+                out.print(ar[i]+"|");
+            out.println();
+            out.flush();
+            out.close();               
         }
         catch(IOException e)
         {
@@ -398,12 +400,25 @@ public class Node {
         return true;
     }
     
+    private boolean isInvalid(String msg)
+    {
+        if(isRepeated(msg))     return true;
+        String[] ar = parseMsg(msg);
+        if(ar[1].equalsIgnoreCase("APP") && !this.tokens.containsKey(ar[2])) 
+        {
+            System.out.println("Write to Client: "+
+            "Error: File does not exist "+msg);
+            return true;                
+        }
+        return false;
+    }
+    
     private void initElection(){
         System.out.println("ATTEMPTING ELECTION");
         elect.holdElection();
         sendToNodes(new String[] {"ELE", Integer.toString(ID)}, 0, 1);
         try {
-            Thread.sleep(1000);
+            Thread.sleep(500);
             if(elect.getNumOkays() == 0) {
                 System.out.println("No responses... Guess I'm the leader");
                 leaderID = ID;
@@ -413,7 +428,7 @@ public class Node {
                 this.counter = 0;
             }
             else {
-                Thread.sleep(1500);
+                Thread.sleep(750);
                 if(elect.recvdCoord()) {
                     leaderID = elect.getCoord();
                 }
@@ -439,7 +454,8 @@ public class Node {
                 leaderID = nodeID;
                 elect.setCoord(leaderID);
                 Thread.sleep(2600);
-                System.out.println("NEW LEADER IS: " + Integer.toString(leaderID));
+                if(leaderID != -1)
+                    System.out.println("NEW LEADER IS: " + Integer.toString(leaderID));
                 elect.endElection();
             }
             catch (InterruptedException e) {
