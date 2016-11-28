@@ -21,6 +21,7 @@ public class Node {
     private int leaderID = -1;
     private int epoch = 0;
     private int counter = 0;
+    private String hist = "history.txt";
     private String initSend;
     private Election elect;
     private HashMap<Integer, AddrPair> neighbors = new HashMap<>(); // Map to store IP addresses and
@@ -40,6 +41,7 @@ public class Node {
         s.append("|");
         initSend = s.toString();
         elect = new Election();
+        File f = new File(hist);
     }
 
     /* Create file. */
@@ -96,6 +98,34 @@ public class Node {
         }
         else {
             System.err.println("\tError: no such file, "+fname);
+        }
+    }
+
+    private synchronized String buildHistEntry(String msg) {
+        StringBuilder s = new StringBuilder();
+        s.append(epoch);
+        s.append(" ");
+        s.append(counter);
+        s.append(" ");
+        s.append(msg);
+        return s.toString();
+    }
+
+    private synchronized void updateHistory(String msg) {
+        BufferedWriter bw = null;
+        try {
+            bw = new BufferedWriter(new FileWriter(hist, true));
+            bw.write(buildHistEntry(msg));
+            bw.newLine();
+            bw.flush();
+        } catch (IOException ioe) {
+            ioe.printStackTrace();
+        } finally {
+            if (bw != null) try {
+                bw.close();
+            } catch (IOException ioe2) {
+                ioe2.printStackTrace();
+            }
         }
     }
 
@@ -168,6 +198,8 @@ public class Node {
                 Thread.sleep(2600);
                 System.out.println("NEW LEADER IS: " + Integer.toString(leaderID));
                 elect.endElection();
+//                epoch++;
+//                counter = 0;
             }
             catch (InterruptedException e) {
                 e.printStackTrace();
@@ -175,10 +207,20 @@ public class Node {
         }
     }
 
+//    private class HistoryHandler implements Runnable {
+//        public HistoryHandler() {}
+//
+//        @Override
+//        public void run() {
+//
+//        }
+//    }
+
     private class ElectHandler implements Runnable {
         private String[] msg;
         public ElectHandler(String[] m) { msg = m; }
 
+        @Override
         public void run() {
             switch (msg[0]) {
                 case "ELE":
@@ -239,14 +281,18 @@ public class Node {
                     break;
                 case "COR":
                     System.out.println("Received coordinator message from: "+m[1]);
-                    electThread = new Thread(new ElectHandler(m));
-                    electThread.start();
+                    Thread coordinateThread = new Thread(new ElectHandler(m));
+                    coordinateThread.start();
                     break;
                 case "OKA":
                     System.out.println("Received OK message from: "+m[1]);
-                    electThread = new Thread(new ElectHandler(m));
-                    electThread.start();
+                    Thread okayThread = new Thread(new ElectHandler(m));
+                    okayThread.start();
                     break;
+//                case "DISC":
+//                    System.out.println("Received discovery message from: "+m[1]);
+//                    Thread discoverThread = new Thread(new HistoryHandler());
+//                    discoverThread.start();
                 case "UP":
                     connID = Integer.parseInt(m[1]);
                     if(!Node.this.connections.containsKey(connID)) {
@@ -261,6 +307,7 @@ public class Node {
         }
 
         /* Read in and handle message. */
+        @Override
         public void run() {
             try {
                 is = new BufferedReader(new InputStreamReader(socket.getInputStream()));
