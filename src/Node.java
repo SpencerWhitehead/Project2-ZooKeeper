@@ -404,12 +404,15 @@ public class Node {
     {
         if(isRepeated(msg))     return true;
         String[] ar = parseMsg(msg);
-        if(ar[1].equalsIgnoreCase("APP") && !this.tokens.containsKey(ar[2])) 
+        if((ar[1].equalsIgnoreCase("APP") ||(ar[1].equalsIgnoreCase("DEL"))) 
+        && !this.tokens.containsKey(ar[2])) 
         {
             System.out.println("Write to Client: "+
             "Error: File does not exist "+msg);
             return true;                
         }
+        if(ar[1].equalsIgnoreCase("NEW")&& this.tokens.containsKey(ar[2])) 
+            return true;
         return false;
     }
     
