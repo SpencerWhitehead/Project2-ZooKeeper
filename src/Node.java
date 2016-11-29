@@ -19,14 +19,17 @@ public class Node {
     private int portNum;	// Port number on which node will be listening to accept connections
     private int ID;	        // ID of node
     private int leaderID = -1;
-    private int epoch = 0;
-    private int counter = 0;
+    private ZXID zxid = new ZXID(0,0);
+//    private int epoch = 0;
+//    private int counter = 0;
     private String hist = "history.txt";
     private String initSend;
+    private boolean firstElect = true;
     private Election elect;
     private HashMap<Integer, AddrPair> neighbors = new HashMap<>(); // Map to store IP addresses and
                                                                     // port numbers of neighbor nodes.
     private ConcurrentHashMap<Integer, Socket> connections = new ConcurrentHashMap<>();
+    private ConcurrentHashMap<Integer, ZXID> processIDs = new ConcurrentHashMap<>();
     private ConcurrentHashMap<String, Token> tokens = new ConcurrentHashMap<>(); // Map to store token objects.
     private ConcurrentHashMap<String, Queue<String[]>> commands = new ConcurrentHashMap<>(); // Map to
                                                                                             // store what commands
@@ -144,10 +147,17 @@ public class Node {
     }
 
     private boolean toSend(int nodeID, int criteria) {
-        if (criteria == 1) { return nodeID > ID; }
-        else if (criteria == -1) { return nodeID < ID; }
-        else if (criteria == 0) { return nodeID != ID; }
-        else { return false;}
+        if (criteria == 0) { return nodeID != ID; }
+
+        ZXID temp = elect.getResponderZXID(nodeID);
+        if (temp != null) {
+            if (criteria == -1) {
+                return zxid.greaterThan(ID, temp.getEpoch(), temp.getCounter(), nodeID);
+            } else if (criteria == 1) {
+                return !zxid.greaterThan(ID, temp.getEpoch(), temp.getCounter(), nodeID);
+            }
+        }
+        return false;
     }
 
     /*
@@ -171,24 +181,35 @@ public class Node {
         }
     }
 
-    private void initElection(){
+    private String[] createLeaderElectMsg(String com) {
+        return new String[] {com, Integer.toString(zxid.getEpoch()), Integer.toString(zxid.getCounter()), Integer.toString(ID)};
+    }
+
+    private void initElection() {
         System.out.println("ATTEMPTING ELECTION");
         elect.holdElection();
-        sendToNodes(new String[] {"ELE", Integer.toString(ID)}, 0, 1);
+        sendToNodes(createLeaderElectMsg("ELE"), 0, 0);
         try {
-            Thread.sleep(1000);
-            if(elect.getNumOkays() == 0) {
+            Thread.sleep(750);
+//            Thread.sleep(1000);
+//            if(elect.getNumOkays() == 0) {
+            if(elect.getNumOkays() == 0 && elect.ongoingElection()) {
                 System.out.println("No responses... Guess I'm the leader");
-                leaderID = ID;
-                sendToNodes(new String[] {"COR", Integer.toString(ID)}, 0, -1);
+                if (leaderID != ID) {
+                    leaderID = ID;
+                    zxid.updateEpoch();
+                }
+                sendToNodes(createLeaderElectMsg("COR"), 0, -1);
                 elect.endElection();
             }
             else {
-                Thread.sleep(1500);
+//                Thread.sleep(1500);
+                Thread.sleep(1000);
                 if(elect.recvdCoord()) {
                     leaderID = elect.getCoord();
                 }
-                else { initElection(); }
+                else if (elect.ongoingElection()) { initElection(); }
+//                else { initElection(); }
             }
         }
         catch (InterruptedException e) {
@@ -197,59 +218,105 @@ public class Node {
         }
     }
 
-    private void onElectRecv(int nodeID) {
+    private void onElectRecv(int nodeEpoch, int nodeCounter, int nodeID) {
         System.out.println("SENDING OKAY MESSAGE");
-        sendToNodes(new String[] {"OKA", Integer.toString(ID)}, nodeID, -2);
-        if(!elect.ongoingElection()) { initElection(); }
-    }
+        StringBuilder s1 = new StringBuilder();
+        s1.append(ID);
+        s1.append("==>");
+        s1.append(zxid.getEpoch());
+        s1.append(",");
+        s1.append(zxid.getCounter());
+        System.out.println(s1.toString());
 
-    private void onCoordRecv(int nodeID) {
-        if(ID > nodeID && !elect.ongoingElection()) { initElection(); }
+        StringBuilder s2 = new StringBuilder();
+        s2.append(nodeID);
+        s2.append("==>");
+        s2.append(nodeEpoch);
+        s2.append(",");
+        s2.append(nodeCounter);
+        System.out.println(s2.toString());
+
+        if(zxid.greaterThan(ID, nodeEpoch, nodeCounter, nodeID)) {
+            sendToNodes(createLeaderElectMsg("OKA"), nodeID, -2);
+            if(!elect.ongoingElection()) { initElection(); }
+        }
         else {
-            try {
-                leaderID = nodeID;
-                elect.setCoord(leaderID);
-                Thread.sleep(2600);
-                System.out.println("NEW LEADER IS: " + Integer.toString(leaderID));
-                elect.endElection();
-//                epoch++;
-//                counter = 0;
-            }
-            catch (InterruptedException e) {
-                e.printStackTrace();
-            }
+            sendToNodes(createLeaderElectMsg("NOK"), nodeID, -2);
         }
     }
 
-//    private class HistoryHandler implements Runnable {
-//        public HistoryHandler() {}
-//
-//        @Override
-//        public void run() {
-//
-//        }
-//    }
+    private void onCoordRecv(int nodeEpoch, int nodeCount, int nodeID) {
+        if(zxid.greaterThan(ID, nodeEpoch, nodeCount, nodeID) && !elect.ongoingElection()) { initElection(); }
+        else {
+            elect.setCoord(nodeID);
+            if (leaderID != nodeID) {
+                leaderID = nodeID;
+                zxid.setEpoch(nodeEpoch);
+                zxid.setCounter(nodeCount);
+            }
+            System.out.println(Thread.currentThread().getName()+"==>NEW LEADER IS: " + Integer.toString(leaderID));
+            elect.endElection();
+        }
+    }
 
+    /*
+        election ID ==> ELE|<epoch>|<counter>|ID|
+		coordinator ID ==> COR|<epoch>|<counter>|ID|
+		ok ID ==> OKA|<epoch>|<counter>|ID|
+     */
     private class ElectHandler implements Runnable {
         private String[] msg;
         public ElectHandler(String[] m) { msg = m; }
 
         @Override
         public void run() {
+            int nodeEpoch = Integer.parseInt(msg[1]);
+            int nodeCounter = Integer.parseInt(msg[2]);
+            int n = Integer.parseInt(msg[3]);
             switch (msg[0]) {
                 case "ELE":
-                    int n = Integer.parseInt(msg[1]);
-                    Node.this.onElectRecv(n);
+//                    Node.this.onElectRecv(nodeEpoch, nodeCounter, n);
+                    if(Node.this.leaderID == -1) {
+                        Node.this.onElectRecv(nodeEpoch, nodeCounter, n);
+                    }
+                    else if (Node.this.leaderID == Node.this.ID) {
+                        Node.this.sendToNodes(createLeaderElectMsg("COR"), n, -2);
+                    }
                     break;
                 case "COR":
-                    Node.this.onCoordRecv(Integer.parseInt(msg[1]));
+                    Node.this.onCoordRecv(nodeEpoch, nodeCounter, n);
                     break;
                 case "OKA":
-                    Node.this.elect.addOkay(Integer.parseInt(msg[1]));
+                    Node.this.elect.addOkay(n);
+                    Node.this.elect.addResponder(nodeEpoch, nodeCounter, n);
+                    break;
+                case "NOK":
+                    Node.this.elect.addResponder(nodeEpoch, nodeCounter, n);
                     break;
             }
         }
     }
+
+//    private class ElectHandler implements Runnable {
+//        private String[] msg;
+//        public ElectHandler(String[] m) { msg = m; }
+//
+//        @Override
+//        public void run() {
+//            switch (msg[0]) {
+//                case "ELE":
+//                    int n = Integer.parseInt(msg[1]);
+//                    Node.this.onElectRecv(n);
+//                    break;
+//                case "COR":
+//                    Node.this.onCoordRecv(Integer.parseInt(msg[1]));
+//                    break;
+//                case "OKA":
+//                    Node.this.elect.addOkay(Integer.parseInt(msg[1]));
+//                    break;
+//            }
+//        }
+//    }
 
     /* Class to handle incoming messages. */
     private class ConnectHandler implements Runnable {
@@ -287,19 +354,28 @@ public class Node {
                     System.out.println("\tReceived token: "+m[2]);
                     break;
                 case "ELE":
-                    System.out.println("Received election message from: "+m[1]);
+                    System.out.println("Received election message from: "+m[3]);
+//                    System.out.println("Received election message from: "+m[1]);
                     Thread electThread = new Thread(new ElectHandler(m));
                     electThread.start();
                     break;
                 case "COR":
-                    System.out.println("Received coordinator message from: "+m[1]);
+                    System.out.println("Received coordinator message from: "+m[3]);
+//                    System.out.println("Received coordinator message from: "+m[1]);
                     Thread coordinateThread = new Thread(new ElectHandler(m));
                     coordinateThread.start();
                     break;
                 case "OKA":
-                    System.out.println("Received OK message from: "+m[1]);
+                    System.out.println("Received OK message from: "+m[3]);
+//                    System.out.println("Received OK message from: "+m[1]);
                     Thread okayThread = new Thread(new ElectHandler(m));
                     okayThread.start();
+                    break;
+                case "NOK":
+                    System.out.println("Received NOK message from: "+m[3]);
+//                    System.out.println("Received OK message from: "+m[1]);
+                    Thread notOkayThread = new Thread(new ElectHandler(m));
+                    notOkayThread.start();
                     break;
 //                case "DISC":
 //                    System.out.println("Received discovery message from: "+m[1]);
@@ -395,6 +471,7 @@ public class Node {
         }
         System.out.println("INITIALIZING ELECTION");
         initElection();
+        firstElect = false;
     }
 
     /* Parse configuration file with node IP addresses and ports. */
