@@ -41,13 +41,26 @@ public class Node {
         s.append("|");
         initSend = s.toString();
         elect = new Election();
-        File f = new File(hist);
+        initializeHistFile();
     }
 
+    private void initializeHistFile() {
+        File f = new File(hist);
+        try {
+            f.createNewFile();
+        }
+        catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    /* Parse incoming message. */
+    private String[] parseMsg(String msg){ return msg.split("\\|"); }
+
     /* Create file. */
-    private void createFile(String fname, int nodeID) {
+    private void createFile(String fname) {
         if (!tokens.containsKey(fname)) {
-            Token t = new Token(fname, nodeID);
+            Token t = new Token(fname);
             tokens.put(fname, t);
             System.out.println("\tCreated file: "+fname);
             StringBuilder s = new StringBuilder();
@@ -61,7 +74,7 @@ public class Node {
     }
 
     /* Delete file. */
-    private void deleteFile(String fname, int nodeID) {
+    private void deleteFile(String fname) {
         if (tokens.containsKey(fname)) {
             Token t = tokens.remove(fname);
             Queue q = commands.remove(fname);
@@ -101,17 +114,18 @@ public class Node {
         }
     }
 
-    private synchronized String buildHistEntry(String msg) {
+    private synchronized String buildHistEntry(String[] m) {
         StringBuilder s = new StringBuilder();
-        s.append(epoch);
-        s.append(" ");
-        s.append(counter);
-        s.append(" ");
-        s.append(msg);
+        s.append(m[m.length-2]);
+        s.append("|");
+        s.append(m[m.length-1]);
+        s.append("|");
+        int i;
+        for(i=1; i<m.length-2; i++) { s.append(m[i]); s.append("|"); }
         return s.toString();
     }
 
-    private synchronized void updateHistory(String msg) {
+    private synchronized void updateHistory(String[] msg) {
         BufferedWriter bw = null;
         try {
             bw = new BufferedWriter(new FileWriter(hist, true));
@@ -245,25 +259,23 @@ public class Node {
         private int connID = -1;
         public ConnectHandler(Socket sock) { socket = sock; }
 
-        /* Parse incoming message. */
-        private String[] parseMsg(String msg){ return msg.split("\\|"); }
 
         /* Parse and perform actions based on message. */
         private void handleMsg(String msg) {
-            String[] m = parseMsg(msg);
+            String[] m = Node.this.parseMsg(msg);
             switch (m[0]){
                 /* If NEW is keyword, then create file. */
                 case "NEW":
                     if(!Node.this.tokens.containsKey(m[2])) {
                         System.out.println("\tCreating file: "+m[2]);
-                        Node.this.createFile(m[2], Integer.parseInt(m[1]));
+                        Node.this.createFile(m[2]);
                     }
                     break;
                 /* If DEL is keyword, then delete file. */
                 case "DEL":
                     if(Node.this.tokens.containsKey(m[2])) {
                         System.out.println("\tDeleting file: "+m[2]);
-                        Node.this.deleteFile(m[2], Integer.parseInt(m[1]));
+                        Node.this.deleteFile(m[2]);
                     }
                     break;
                 /* If REQ is keyword, then request token. */
