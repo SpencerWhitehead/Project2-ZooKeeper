@@ -45,14 +45,15 @@ public class Node {
     //key: "<epoch>_<counter>" value: number of acks for this 
     
     private File historyFile = null;
+//    private final File historyFile = new File(Integer.toString(ID)+"_hist_file");
     private ConcurrentSkipListSet<String> committedTransactions = new ConcurrentSkipListSet<>();
     
     private ConcurrentSkipListSet<String> queuedTransSet = new ConcurrentSkipListSet<>();
     private ConcurrentLinkedQueue<String> queue = new ConcurrentLinkedQueue<>();
     
     public Node(int port, int ident) {
-        this.portNum = port;
-        this.ID = ident;
+        portNum = port;
+        ID = ident;
         StringBuilder s = new StringBuilder();
         s.append("UP|");
         s.append(ID);
@@ -63,8 +64,7 @@ public class Node {
     }
 
     /* Create history file. */
-    private void createHistoryFile()
-    {
+    private void createHistoryFile() {
         String fname = Integer.toString(ID)+"_hist_file";
         try
         {
@@ -75,13 +75,86 @@ public class Node {
                 System.out.println("History File already exists");
                 System.out.println("Was there a crash recovery?");
             }
-                
-            
         }
         catch(IOException e)
         {
             System.out.println("Error! History file could not be created ");
         }
+    }
+
+    private void execHistItem(String[] com) {
+        switch (com[2]) {
+            case "NEW":
+                createFile(com[3]);
+                break;
+            case "DEL":
+                deleteFile(com[3]);
+                break;
+            case "APP":
+                appendFile(com[3], com[4]);
+        }
+    }
+
+//    private void updateTokensFromHistory(ConcurrentLinkedQueue<String> comQ) {
+//        while (comQ.size() > 0) {
+//            String msg = comQ.poll();
+//            String[] com = parseMsg(msg);
+//            execHistItem(com);
+//        }
+//    }
+
+    private void updateTokensFromHistory() {
+        synchronized (historyFile) {
+            try (BufferedReader br = new BufferedReader(new FileReader(historyFile))) {
+                String line;
+                while ((line = br.readLine()) != null) {
+                    String[] com = parseMsg(line);
+                    execHistItem(com);
+//                    zxid.setEpoch(Integer.parseInt(com[0]));
+//                    zxid.setCounter(Integer.parseInt(com[1]));
+                }
+            } catch (IOException e) {
+                System.err.println(e);
+            }
+        }
+    }
+
+//    private ZXID diffHistories(String[] history, String delimiter) {
+//        try (BufferedReader br = new BufferedReader(new FileReader(historyFile))) {
+//            String line;
+//            while ((line = br.readLine()) != null) {
+//
+//            }
+//        }
+//        catch (IOException e) {
+//            e.printStackTrace();
+//        }
+//    }
+
+    private void mergeHistories(String[] history, boolean naive) {
+        naive = true;
+        ConcurrentLinkedQueue<String> q = new ConcurrentLinkedQueue<>();
+        synchronized (historyFile) {
+            try {
+                if (naive) {
+                    PrintWriter writer = new PrintWriter(historyFile);
+                    writer.print("");
+                    int i;
+                    for(i=0; i<history.length; i++) {
+                        writer.println(buildHistEntry(parseMsg(history[i]), true));
+                    }
+                    writer.close();
+                }
+            }
+            catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    private synchronized void matchLeaderHist(String[] history, boolean naive) {
+        mergeHistories(history, naive);
+        updateTokensFromHistory();
     }
 
     /* Create file. */
@@ -131,8 +204,7 @@ public class Node {
     }
 
     /* Read specified file. */
-    private String readFile(String fname) 
-    {
+    private String readFile(String fname) {
         StringBuilder st = new StringBuilder();
         if (tokens.containsKey(fname)) {
             Token t = tokens.get(fname);
@@ -195,8 +267,7 @@ public class Node {
         }
     }    
 
-    private synchronized void propose(String[] cts)
-    {
+    private synchronized void propose(String[] cts) {
         ArrayList<String> li = new ArrayList<>();
         li.add("PRO");  
         for(int i = 0; i < cts.length; ++i)     li.add(cts[i]);
@@ -209,15 +280,14 @@ public class Node {
         onRecvPropose(MessageSender.formatMsg(li),true);
     }
     
-    private void onRecvPropose(String msg, boolean isSelf)
-    {
+    private void onRecvPropose(String msg, boolean isSelf) {
         String[] ar = parseMsg(msg);
         if(!ar[0].equalsIgnoreCase("PRO"))
         {
             System.out.println("Error! Not a propose message!");
             System.exit(-1);
         }
-        updateHistory(ar);
+        updateHistory(ar, false);
         ar[0] = "CMT";
         boolean b = this.queuedTransSet.add(MessageSender.formatMsg(ar));   
         if(b) this.queue.add(MessageSender.formatMsg(ar));        
@@ -228,8 +298,7 @@ public class Node {
         }
     }
     
-    private synchronized void onRecvAck(String msg)
-    {
+    private synchronized void onRecvAck(String msg) {
         String[] m = parseMsg(msg);
         String key = m[m.length-2]+"_"+m[m.length-1];
         Integer x = this.ackCount.get(key);
@@ -254,10 +323,8 @@ public class Node {
     }
     
     //***deliver items in buffer queue then deliver***
-    private void onRecvCMT(String msg, boolean isSelf)
-    {
-        while(this.queue.size()>0)
-        {
+    private void onRecvCMT(String msg, boolean isSelf) {
+        while(this.queue.size()>0) {
             String s = this.queue.poll();
             this.queuedTransSet.remove(s);
             String[] ar = parseMsg(s);
@@ -287,8 +354,7 @@ public class Node {
     //delete: if file never deleted, false, otherwise, reverse of create
     //append: if last line appened to this file is the same, then true
     //else false
-    private boolean isRepeated(String msg)
-    {
+    private boolean isRepeated(String msg) {
         String[] ar = parseMsg(msg);
         if(ar.length<3)
         {
@@ -404,8 +470,7 @@ public class Node {
         return true;
     }
     
-    private boolean isInvalid(String msg,List<String> li)
-    {
+    private boolean isInvalid(String msg,List<String> li) {
         String[] ar = parseMsg(msg);
         if(!ar[0].equalsIgnoreCase("RED") && isRepeated(msg))
         {
@@ -428,24 +493,34 @@ public class Node {
         return false;
     }
     
-    private synchronized String buildHistEntry(String[] m) 
-    {
+    private synchronized String buildHistEntry(String[] m, boolean preformatted) {
         StringBuilder s = new StringBuilder();
-        s.append(m[m.length-2]);
-        s.append("|");
-        s.append(m[m.length-1]);
-        s.append("|");
-        int i;
-        for(i=1; i<m.length-2; i++) { s.append(m[i]); s.append("|"); }
+        if(!preformatted) {
+            s.append(m[m.length - 2]);
+            s.append("|");
+            s.append(m[m.length - 1]);
+            s.append("|");
+            int i;
+            for (i = 1; i < m.length - 2; i++) {
+                s.append(m[i]);
+                s.append("|");
+            }
+        }
+        else {
+            int i;
+            for (i = 0; i < m.length; i++) {
+                s.append(m[i]);
+                s.append("|");
+            }
+        }
         return s.toString();
     }
 
-    private synchronized void updateHistory(String[] msg) 
-    {
+    private synchronized void updateHistory(String[] msg, boolean preformatted) {
         BufferedWriter bw = null;
         try {
             bw = new BufferedWriter(new FileWriter(this.historyFile, true));
-            bw.write(buildHistEntry(msg));
+            bw.write(buildHistEntry(msg, preformatted));
             bw.newLine();
             bw.flush();
         } catch (IOException ioe) {
@@ -682,7 +757,6 @@ public class Node {
                         break;
                 }                
             }
-            
         }
 
         /* Read in and handle message. */
