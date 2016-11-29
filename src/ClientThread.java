@@ -18,6 +18,10 @@ public class ClientThread implements Runnable
         this.clZobj = clZobj;
     }
     
+    public void startUp(Socket s)
+    {
+        MessageSender.sendMsg(s,"CLI|"+this.clZobj.name);     
+    }    
     public void run()
     {
         try 
@@ -25,6 +29,7 @@ public class ClientThread implements Runnable
             //System.out.println(1);           
             Socket s = new Socket(this.serverIP,this.serverPort);
             clZobj.soc = s;
+            startUp(s);       
             BufferedOutputStream bos = new BufferedOutputStream(s.
               getOutputStream());
 
