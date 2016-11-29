@@ -25,6 +25,18 @@ public class ZXID {
 
     public synchronized void updateCounter() { counter++; }
 
+    public boolean greaterThan(int myNodeID, int nodeEpoch, int nodeCount, int nodeID, int leadID) {
+        if (epoch > nodeEpoch) { return true; }
+        else if (epoch == nodeEpoch) {
+            if (counter > nodeCount) { return true; }
+            else if (counter == nodeCount) {
+                if (myNodeID == leadID) { return true; }
+                else if (nodeID != leadID) { return myNodeID > nodeID; }
+            }
+        }
+        return false;
+    }
+
     public boolean greaterThan(int myNodeID, int nodeEpoch, int nodeCount, int nodeID) {
         if (epoch > nodeEpoch) { return true; }
         else if (epoch == nodeEpoch) {

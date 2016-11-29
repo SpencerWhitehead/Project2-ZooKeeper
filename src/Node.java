@@ -20,11 +20,8 @@ public class Node {
     private int ID;	        // ID of node
     private int leaderID = -1;
     private ZXID zxid = new ZXID(0,0);
-//    private int epoch = 0;
-//    private int counter = 0;
     private String hist = "history.txt";
     private String initSend;
-    private boolean firstElect = true;
     private Election elect;
     private HashMap<Integer, AddrPair> neighbors = new HashMap<>(); // Map to store IP addresses and
                                                                     // port numbers of neighbor nodes.
@@ -152,9 +149,9 @@ public class Node {
         ZXID temp = elect.getResponderZXID(nodeID);
         if (temp != null) {
             if (criteria == -1) {
-                return zxid.greaterThan(ID, temp.getEpoch(), temp.getCounter(), nodeID);
+                return zxid.greaterThan(ID, temp.getEpoch(), temp.getCounter(), nodeID, leaderID);
             } else if (criteria == 1) {
-                return !zxid.greaterThan(ID, temp.getEpoch(), temp.getCounter(), nodeID);
+                return !zxid.greaterThan(ID, temp.getEpoch(), temp.getCounter(), nodeID, leaderID);
             }
         }
         return false;
@@ -236,7 +233,7 @@ public class Node {
         s2.append(nodeCounter);
         System.out.println(s2.toString());
 
-        if(zxid.greaterThan(ID, nodeEpoch, nodeCounter, nodeID)) {
+        if(zxid.greaterThan(ID, nodeEpoch, nodeCounter, nodeID, leaderID)) {
             sendToNodes(createLeaderElectMsg("OKA"), nodeID, -2);
             if(!elect.ongoingElection()) { initElection(); }
         }
@@ -246,7 +243,7 @@ public class Node {
     }
 
     private void onCoordRecv(int nodeEpoch, int nodeCount, int nodeID) {
-        if(zxid.greaterThan(ID, nodeEpoch, nodeCount, nodeID) && !elect.ongoingElection()) { initElection(); }
+        if(zxid.greaterThan(ID, nodeEpoch, nodeCount, nodeID, leaderID) && !elect.ongoingElection()) { initElection(); }
         else {
             elect.setCoord(nodeID);
             if (leaderID != nodeID) {
@@ -275,13 +272,7 @@ public class Node {
             int n = Integer.parseInt(msg[3]);
             switch (msg[0]) {
                 case "ELE":
-//                    Node.this.onElectRecv(nodeEpoch, nodeCounter, n);
-                    if(Node.this.leaderID == -1) {
-                        Node.this.onElectRecv(nodeEpoch, nodeCounter, n);
-                    }
-                    else if (Node.this.leaderID == Node.this.ID) {
-                        Node.this.sendToNodes(createLeaderElectMsg("COR"), n, -2);
-                    }
+                    Node.this.onElectRecv(nodeEpoch, nodeCounter, n);
                     break;
                 case "COR":
                     Node.this.onCoordRecv(nodeEpoch, nodeCounter, n);
@@ -297,27 +288,6 @@ public class Node {
         }
     }
 
-//    private class ElectHandler implements Runnable {
-//        private String[] msg;
-//        public ElectHandler(String[] m) { msg = m; }
-//
-//        @Override
-//        public void run() {
-//            switch (msg[0]) {
-//                case "ELE":
-//                    int n = Integer.parseInt(msg[1]);
-//                    Node.this.onElectRecv(n);
-//                    break;
-//                case "COR":
-//                    Node.this.onCoordRecv(Integer.parseInt(msg[1]));
-//                    break;
-//                case "OKA":
-//                    Node.this.elect.addOkay(Integer.parseInt(msg[1]));
-//                    break;
-//            }
-//        }
-//    }
-
     /* Class to handle incoming messages. */
     private class ConnectHandler implements Runnable {
         private Socket socket = null; // Socket of incoming connection.
@@ -325,7 +295,6 @@ public class Node {
         private PrintWriter os = null;
         private int connID = -1;
         public ConnectHandler(Socket sock) { socket = sock; }
-
 
         /* Parse and perform actions based on message. */
         private void handleMsg(String msg) {
@@ -349,38 +318,29 @@ public class Node {
                 case "APP":
                     System.out.println("\tReceived request for file: "+m[2]);
                     break;
-                /* If TOK is keyword, then handle token. */
                 case "RED":
                     System.out.println("\tReceived token: "+m[2]);
                     break;
                 case "ELE":
                     System.out.println("Received election message from: "+m[3]);
-//                    System.out.println("Received election message from: "+m[1]);
                     Thread electThread = new Thread(new ElectHandler(m));
                     electThread.start();
                     break;
                 case "COR":
                     System.out.println("Received coordinator message from: "+m[3]);
-//                    System.out.println("Received coordinator message from: "+m[1]);
                     Thread coordinateThread = new Thread(new ElectHandler(m));
                     coordinateThread.start();
                     break;
                 case "OKA":
                     System.out.println("Received OK message from: "+m[3]);
-//                    System.out.println("Received OK message from: "+m[1]);
                     Thread okayThread = new Thread(new ElectHandler(m));
                     okayThread.start();
                     break;
                 case "NOK":
                     System.out.println("Received NOK message from: "+m[3]);
-//                    System.out.println("Received OK message from: "+m[1]);
                     Thread notOkayThread = new Thread(new ElectHandler(m));
                     notOkayThread.start();
                     break;
-//                case "DISC":
-//                    System.out.println("Received discovery message from: "+m[1]);
-//                    Thread discoverThread = new Thread(new HistoryHandler());
-//                    discoverThread.start();
                 case "UP":
                     connID = Integer.parseInt(m[1]);
                     if(!Node.this.connections.containsKey(connID)) {
@@ -425,7 +385,6 @@ public class Node {
             }
             catch (IOException e){
                 System.err.println("Connection error (ConnectHandler):");
-//                e.printStackTrace();
                 System.err.println(e);
             }
         }
@@ -471,7 +430,6 @@ public class Node {
         }
         System.out.println("INITIALIZING ELECTION");
         initElection();
-        firstElect = false;
     }
 
     /* Parse configuration file with node IP addresses and ports. */
