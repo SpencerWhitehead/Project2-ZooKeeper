@@ -210,25 +210,10 @@ public class Node {
             System.out.println("Error! Not a propose message!");
             System.exit(-1);
         }
-        try
-        {
-            PrintWriter out = null;
-            out = new PrintWriter(new BufferedWriter(new FileWriter(this.historyFile, true)));
-            out.print(ar[ar.length-2]+"|"+ar[ar.length-1]+"|"); 
-            for(int i = 1; i < ar.length-2;++i) 
-                out.print(ar[i]+"|");
-            out.println();
-            out.flush();
-            out.close();               
-            ar[0] = "CMT";
-            boolean b = this.queuedTransSet.add(MessageSender.formatMsg(ar));   
-            if(b) this.queue.add(MessageSender.formatMsg(ar));
-        }
-        catch(IOException e)
-        {
-            System.out.println("Error in writing to disk. Message: "+msg);
-            System.exit(-1);
-        }
+        updateHistory(ar);
+        ar[0] = "CMT";
+        boolean b = this.queuedTransSet.add(MessageSender.formatMsg(ar));   
+        if(b) this.queue.add(MessageSender.formatMsg(ar));        
         if(!isSelf)
         {
             ar[0] = "ACK";
@@ -435,6 +420,37 @@ public class Node {
         }
         return false;
     }
+    
+    private synchronized String buildHistEntry(String[] m) 
+    {
+        StringBuilder s = new StringBuilder();
+        s.append(m[m.length-2]);
+        s.append("|");
+        s.append(m[m.length-1]);
+        s.append("|");
+        int i;
+        for(i=1; i<m.length-2; i++) { s.append(m[i]); s.append("|"); }
+        return s.toString();
+    }
+
+    private synchronized void updateHistory(String[] msg) 
+    {
+        BufferedWriter bw = null;
+        try {
+            bw = new BufferedWriter(new FileWriter(this.historyFile, true));
+            bw.write(buildHistEntry(msg));
+            bw.newLine();
+            bw.flush();
+        } catch (IOException ioe) {
+            ioe.printStackTrace();
+        } finally {
+            if (bw != null) try {
+                bw.close();
+            } catch (IOException ioe2) {
+                ioe2.printStackTrace();
+            }
+        }
+    }    
     
     private void initElection(){
         System.out.println("ATTEMPTING ELECTION");
