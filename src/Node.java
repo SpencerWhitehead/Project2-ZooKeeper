@@ -26,7 +26,6 @@ public class Node {
     private HashMap<Integer, AddrPair> neighbors = new HashMap<>(); // Map to store IP addresses and
                                                                     // port numbers of neighbor nodes.
     private ConcurrentHashMap<Integer, Socket> connections = new ConcurrentHashMap<>();
-    private ConcurrentHashMap<Integer, ZXID> processIDs = new ConcurrentHashMap<>();
     private ConcurrentHashMap<String, Token> tokens = new ConcurrentHashMap<>(); // Map to store token objects.
     private ConcurrentHashMap<String, Queue<String[]>> commands = new ConcurrentHashMap<>(); // Map to
                                                                                             // store what commands
@@ -180,6 +179,7 @@ public class Node {
 
     private String[] createLeaderElectMsg(String com) {
         return new String[] {com, Integer.toString(zxid.getEpoch()), Integer.toString(zxid.getCounter()), Integer.toString(ID)};
+//        return new String[] {com, Integer.toString(ID), Integer.toString(zxid.getEpoch()), Integer.toString(zxid.getCounter())};
     }
 
     private void initElection() {
@@ -270,6 +270,9 @@ public class Node {
             int nodeEpoch = Integer.parseInt(msg[1]);
             int nodeCounter = Integer.parseInt(msg[2]);
             int n = Integer.parseInt(msg[3]);
+//            int n = Integer.parseInt(msg[1]);
+//            int nodeEpoch = Integer.parseInt(msg[2]);
+//            int nodeCounter = Integer.parseInt(msg[3]);
             switch (msg[0]) {
                 case "ELE":
                     Node.this.onElectRecv(nodeEpoch, nodeCounter, n);
