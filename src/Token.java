@@ -3,13 +3,10 @@
  * Partha Sarathi Mukherjee, mukhep
  */
 
-import java.util.Queue;
-import java.util.concurrent.ConcurrentLinkedQueue;
 
 /* Class to represent a token (file) in the system. */
 public class Token {
     private String fname; // File name
-
     String contents = ""; // File contents
 
     public Token(String f) {
@@ -28,11 +25,8 @@ public class Token {
     /* Append data to file. */
     public void appendContents(String toAppend) {
         StringBuilder s = new StringBuilder();
-        s.append(contents+"_");
+        s.append(contents);
         s.append(toAppend);
         contents = s.toString();
     }
-
-    /* Delete contents of file. */
-    public void releaseContents() {contents = "";}
 }
