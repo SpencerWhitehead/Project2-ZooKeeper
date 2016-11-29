@@ -24,8 +24,8 @@ import java.util.concurrent.*;
 *  token object.
 */
 public class Node {
-    private int portNum;	// Port number on which node will be listening to accept connections
-    private int ID;	        // ID of node
+    private int portNum;    // Port number on which node will be listening to accept connections
+    private int ID;         // ID of node
     private int leaderID = -1;
     private ZXID zxid = new ZXID(0,0);
     private String initSend;
@@ -45,6 +45,7 @@ public class Node {
     //key: "<epoch>_<counter>" value: number of acks for this 
     
     private File historyFile = null;
+    //private final File historyFile = new File(Integer.toString(ID)+"_hist_file");
     private ConcurrentSkipListSet<String> committedTransactions = new ConcurrentSkipListSet<>();
     
     private ConcurrentSkipListSet<String> queuedTransSet = new ConcurrentSkipListSet<>();
@@ -63,8 +64,7 @@ public class Node {
     }
 
     /* Create history file. */
-    private void createHistoryFile()
-    {
+    private void createHistoryFile() {
         String fname = Integer.toString(ID)+"_hist_file";
         try
         {
@@ -75,13 +75,85 @@ public class Node {
                 System.out.println("History File already exists");
                 System.out.println("Was there a crash recovery?");
             }
-                
-            
         }
         catch(IOException e)
         {
             System.out.println("Error! History file could not be created ");
         }
+    }
+
+    private void execHistItem(String[] com) {
+        switch (com[2]) {
+            case "NEW":
+                createFile(com[3]);
+                break;
+            case "DEL":
+                deleteFile(com[3]);
+                break;
+            case "APP":
+                appendFile(com[3], com[4]);
+        }
+    }
+
+//    private void updateTokensFromHistory(ConcurrentLinkedQueue<String> comQ) {
+//        while (comQ.size() > 0) {
+//            String msg = comQ.poll();
+//            String[] com = parseMsg(msg);
+//            execHistItem(com);
+//        }
+//    }
+
+    private void updateTokensFromHistory() {
+        tokens.clear();
+        synchronized (historyFile) {
+            try (BufferedReader br = new BufferedReader(new FileReader(historyFile))) {
+                String line;
+                while ((line = br.readLine()) != null) {
+                    String[] com = parseMsg(line);
+                    execHistItem(com);
+                }
+            } catch (IOException e) {
+                System.err.println(e);
+            }
+        }
+    }
+
+//    private ZXID diffHistories(String[] history, String delimiter) {
+//        try (BufferedReader br = new BufferedReader(new FileReader(historyFile))) {
+//            String line;
+//            while ((line = br.readLine()) != null) {
+//
+//            }
+//        }
+//        catch (IOException e) {
+//            e.printStackTrace();
+//        }
+//    }
+
+    private void mergeHistories(String[] history, boolean naive) {
+        naive = true;
+        ConcurrentLinkedQueue<String> q = new ConcurrentLinkedQueue<>();
+        synchronized (historyFile) {
+            try {
+                if (naive) {
+                    PrintWriter writer = new PrintWriter(historyFile);
+                    writer.print("");
+                    int i;
+                    for(i=0; i<history.length; i++) {
+                        writer.println(buildHistEntry(parseMsg(history[i]), true));
+                    }
+                    writer.close();
+                }
+            }
+            catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    private synchronized void matchLeaderHist(String[] history, boolean naive) {
+        mergeHistories(history, naive);
+        updateTokensFromHistory();
     }
 
     /* Create file. */
@@ -131,8 +203,7 @@ public class Node {
     }
 
     /* Read specified file. */
-    private String readFile(String fname) 
-    {
+    private String readFile(String fname) {
         StringBuilder st = new StringBuilder();
         if (tokens.containsKey(fname)) {
             Token t = tokens.get(fname);
@@ -193,10 +264,23 @@ public class Node {
                 }
             }
         }
-    }    
+    }
 
-    private synchronized void propose(String[] cts)
-    {
+    private void sendToNodes(String msg, int nodeID, int whichNodes) {
+        if(nodeID != 0 && whichNodes == -2 && serverConnections.containsKey(nodeID)) {
+            System.out.println("ABOUT TO SEND " +msg+" MESSAGE TO "+Integer.toString(nodeID));
+            MessageSender.sendMsg(serverConnections.get(nodeID), msg);
+        }
+        else {
+            for (Map.Entry<Integer, AddrPair> entry : neighbors.entrySet()) {
+                if (toSend(entry.getKey(), whichNodes) && serverConnections.containsKey(entry.getKey())) {
+                    MessageSender.sendMsg(serverConnections.get(entry.getKey()), msg);
+                }
+            }
+        }
+    }
+
+    private synchronized void propose(String[] cts) {
         ArrayList<String> li = new ArrayList<>();
         li.add("PRO");  
         for(int i = 0; i < cts.length; ++i)     li.add(cts[i]);
@@ -209,15 +293,14 @@ public class Node {
         onRecvPropose(MessageSender.formatMsg(li),true);
     }
     
-    private void onRecvPropose(String msg, boolean isSelf)
-    {
+    private void onRecvPropose(String msg, boolean isSelf) {
         String[] ar = parseMsg(msg);
         if(!ar[0].equalsIgnoreCase("PRO"))
         {
             System.out.println("Error! Not a propose message!");
             System.exit(-1);
         }
-        updateHistory(ar);
+        updateHistory(ar, false);
         ar[0] = "CMT";
         boolean b = this.queuedTransSet.add(MessageSender.formatMsg(ar));   
         if(b) this.queue.add(MessageSender.formatMsg(ar));        
@@ -228,8 +311,7 @@ public class Node {
         }
     }
     
-    private synchronized void onRecvAck(String msg)
-    {
+    private synchronized void onRecvAck(String msg) {
         String[] m = parseMsg(msg);
         String key = m[m.length-2]+"_"+m[m.length-1];
         Integer x = this.ackCount.get(key);
@@ -254,10 +336,8 @@ public class Node {
     }
     
     //***deliver items in buffer queue then deliver***
-    private void onRecvCMT(String msg, boolean isSelf)
-    {
-        while(this.queue.size()>0)
-        {
+    private void onRecvCMT(String msg, boolean isSelf) {
+        while(this.queue.size()>0) {
             String s = this.queue.poll();
             this.queuedTransSet.remove(s);
             String[] ar = parseMsg(s);
@@ -287,8 +367,7 @@ public class Node {
     //delete: if file never deleted, false, otherwise, reverse of create
     //append: if last line appened to this file is the same, then true
     //else false
-    private boolean isRepeated(String msg)
-    {
+    private boolean isRepeated(String msg) {
         String[] ar = parseMsg(msg);
         if(ar.length<3)
         {
@@ -404,8 +483,7 @@ public class Node {
         return true;
     }
     
-    private boolean isInvalid(String msg,List<String> li)
-    {
+    private boolean isInvalid(String msg,List<String> li) {
         String[] ar = parseMsg(msg);
         if(!ar[0].equalsIgnoreCase("RED") && isRepeated(msg))
         {
@@ -428,24 +506,34 @@ public class Node {
         return false;
     }
     
-    private synchronized String buildHistEntry(String[] m) 
-    {
+    private synchronized String buildHistEntry(String[] m, boolean preformatted) {
         StringBuilder s = new StringBuilder();
-        s.append(m[m.length-2]);
-        s.append("|");
-        s.append(m[m.length-1]);
-        s.append("|");
-        int i;
-        for(i=1; i<m.length-2; i++) { s.append(m[i]); s.append("|"); }
+        if(!preformatted) {
+            s.append(m[m.length - 2]);
+            s.append("|");
+            s.append(m[m.length - 1]);
+            s.append("|");
+            int i;
+            for (i = 1; i < m.length - 2; i++) {
+                s.append(m[i]);
+                s.append("|");
+            }
+        }
+        else {
+            int i;
+            for (i = 0; i < m.length; i++) {
+                s.append(m[i]);
+                s.append("|");
+            }
+        }
         return s.toString();
     }
 
-    private synchronized void updateHistory(String[] msg) 
-    {
+    private synchronized void updateHistory(String[] msg, boolean preformatted) {
         BufferedWriter bw = null;
         try {
             bw = new BufferedWriter(new FileWriter(this.historyFile, true));
-            bw.write(buildHistEntry(msg));
+            bw.write(buildHistEntry(msg, preformatted));
             bw.newLine();
             bw.flush();
         } catch (IOException ioe) {
@@ -457,6 +545,35 @@ public class Node {
                 ioe2.printStackTrace();
             }
         }
+    }
+
+    private synchronized String formHistoryMessage() {
+        String line = null;
+        StringBuilder st = new StringBuilder("HIS_");
+        try 
+        {
+            FileReader fileRd = new FileReader(this.historyFile);
+            BufferedReader bufRd = new BufferedReader(fileRd);
+            while((line=bufRd.readLine())!=null)
+            {
+                if(line.trim().length()==0)
+                    continue;
+                st.append(line+"_");                
+            }
+        } 
+        catch(Exception e) 
+        {
+            System.err.println("Error in reading history file");
+            return null;
+        }
+        return st.toString();
+    }
+    
+    private synchronized void sendHistoryMsg(int nodeID) {
+        //nodeID zero indicates send to all nodes
+        if(nodeID==0)   sendToNodes(formHistoryMessage(),nodeID,0);
+        else    sendToNodes(formHistoryMessage(),nodeID,-2);
+        
     }
 
     private String[] createLeaderElectMsg(String com) {
@@ -586,9 +703,22 @@ public class Node {
         private int connID = -1;
         public ConnectHandler(Socket sock) { socket = sock; }
 
+        private void handleHistoryMsg(String msg) {
+            String[] ar = msg.split("_");
+            String[] ar1 = new String[ar.length-1];
+            for(int i = 1;i<ar.length;++i) { ar1[i-1] = ar[i]; }
+            Node.this.mergeHistories(ar1, true);
+            Node.this.updateTokensFromHistory();
+            
+        }
+
         /* Parse and perform actions based on message. */
-        private void handleMsg(String msg) 
-        {
+        private void handleMsg(String msg) {
+            if(msg.substring(0,4).equals("HIS_")) {
+                handleHistoryMsg(msg);
+                return;
+            }
+
             String[] m = Node.this.parseMsg(msg);
             List<String> li = new ArrayList<>();
             if(Node.this.leaderID != Node.this.ID && (m[0].equalsIgnoreCase("NEW") || 
@@ -663,12 +793,13 @@ public class Node {
                         System.out.println("Received NOK message from: "+m[3]);
                         Thread notOkayThread = new Thread(new ElectHandler(m));
                         notOkayThread.start();
-						break;
+                        break;
                     case "UP":
                         connID = Integer.parseInt(m[1]);
                         if(!Node.this.serverConnections.containsKey(connID)) {
                             Node.this.serverConnections.put(connID, socket);
                             System.out.println("Added NodeID "+connID+" to serverConnections");
+                            if(Node.this.leaderID == Node.this.ID)  {sendHistoryMsg(connID);}
                         }
                         break;
                     case "CLI":
