@@ -34,7 +34,8 @@ public class Node {
     private HashMap<Integer, AddrPair> neighbors = new HashMap<>(); 
     // Map to store IP addresses and port numbers of neighbor nodes.
     
-    private ConcurrentHashMap<Integer, Socket> connections = new ConcurrentHashMap<>();
+    private ConcurrentHashMap<Integer, Socket> serverConnections = new ConcurrentHashMap<>();
+    private ConcurrentHashMap<String, Socket> clientConnections = new ConcurrentHashMap<>();
     private ConcurrentHashMap<String, Token> tokens = new ConcurrentHashMap<>(); 
     // Map to store token objects.
     
@@ -46,6 +47,10 @@ public class Node {
     
     private File historyFile = null;
     private ConcurrentSkipListSet<String> committedTransactions = new ConcurrentSkipListSet<>();
+    
+    private ConcurrentSkipListSet<String> queuedTransSet = new ConcurrentSkipListSet<>();
+    private ConcurrentLinkedQueue<String> queue = new ConcurrentLinkedQueue<>();
+    
     public Node(int port, int ident) {
         this.portNum = port;
         this.ID = ident;
@@ -126,16 +131,19 @@ public class Node {
         }
     }
 
-    /* Read file specified file. */
-    private void readFile(String fname) {
+    /* Read specified file. */
+    private String readFile(String fname) 
+    {
+        StringBuilder st = new StringBuilder();
         if (tokens.containsKey(fname)) {
             Token t = tokens.get(fname);
-            System.out.println("\tReading "+fname+":");
-            System.out.println("\t\t"+tokens.get(fname).getContents());
+            st.append("\tReading "+fname+":");
+            st.append("\t\t"+tokens.get(fname).getContents());
         }
         else {
-            System.err.println("\tError: no such file, "+fname);
+            st.append("ERR|Error: no such file, "+fname);
         }
+        return st.toString();
     }
 
     private boolean toSend(int nodeID, int criteria) {
@@ -153,14 +161,14 @@ public class Node {
     *  */
     private void sendToNodes(String[] contents, int nodeID, int whichNodes) {
         String msg = MessageSender.formatMsg(contents);
-        if(nodeID != 0 && whichNodes == -2 && connections.containsKey(nodeID)) {
+        if(nodeID != 0 && whichNodes == -2 && serverConnections.containsKey(nodeID)) {
             System.out.println("ABOUT TO SEND " +msg+" MESSAGE TO "+Integer.toString(nodeID));
-            MessageSender.sendMsg(connections.get(nodeID), msg);
+            MessageSender.sendMsg(serverConnections.get(nodeID), msg);
         }
         else {
             for (Map.Entry<Integer, AddrPair> entry : neighbors.entrySet()) {
-                if (toSend(entry.getKey(), whichNodes) && connections.containsKey(entry.getKey())) {
-                    MessageSender.sendMsg(connections.get(entry.getKey()), msg);
+                if (toSend(entry.getKey(), whichNodes) && serverConnections.containsKey(entry.getKey())) {
+                    MessageSender.sendMsg(serverConnections.get(entry.getKey()), msg);
                 }
             }
         }
@@ -168,14 +176,14 @@ public class Node {
     
     private void sendToNodes(ArrayList<String> contents, int nodeID, int whichNodes) {
         String msg = MessageSender.formatMsg(contents);
-        if(nodeID != 0 && whichNodes == -2 && connections.containsKey(nodeID)) {
+        if(nodeID != 0 && whichNodes == -2 && serverConnections.containsKey(nodeID)) {
             System.out.println("ABOUT TO SEND " +msg+" MESSAGE TO "+Integer.toString(nodeID));
-            MessageSender.sendMsg(connections.get(nodeID), msg);
+            MessageSender.sendMsg(serverConnections.get(nodeID), msg);
         }
         else {
             for (Map.Entry<Integer, AddrPair> entry : neighbors.entrySet()) {
-                if (toSend(entry.getKey(), whichNodes) && connections.containsKey(entry.getKey())) {
-                    MessageSender.sendMsg(connections.get(entry.getKey()), msg);
+                if (toSend(entry.getKey(), whichNodes) && serverConnections.containsKey(entry.getKey())) {
+                    MessageSender.sendMsg(serverConnections.get(entry.getKey()), msg);
                 }
             }
         }
@@ -187,12 +195,6 @@ public class Node {
         li.add("PRO");  
         for(int i = 0; i < cts.length; ++i)     li.add(cts[i]);
         li.add(Integer.toString(this.epoch));   li.add(Integer.toString(this.counter));   
-        boolean b = isInvalid(MessageSender.formatMsg(li));        
-        if(b)
-        {
-            System.out.println("Write to Client: Error: Invalid command");
-            return;
-        }
         ++this.counter;
         System.out.println("Sending following "+
         "proposal to all followers: " + MessageSender.formatMsg(li));
@@ -218,6 +220,9 @@ public class Node {
             out.println();
             out.flush();
             out.close();               
+            ar[0] = "CMT";
+            boolean b = this.queuedTransSet.add(MessageSender.formatMsg(ar));   
+            if(b) this.queue.add(MessageSender.formatMsg(ar));
         }
         catch(IOException e)
         {
@@ -245,7 +250,7 @@ public class Node {
         //without sending an actual message                        
         System.out.println(ackCount.get(key)+"_"+neighbors.size());
         if(committedTransactions.contains(key)) return;
-        if(ackCount.get(key)+1 > (this.neighbors.size()+1)/2) 
+        if(ackCount.get(key)+1 > this.neighbors.size()/2) 
         {
             System.out.println("Hello again!");
             m[0] = "CMT";
@@ -256,20 +261,27 @@ public class Node {
         //else do nothing
     }
     
-    //***not buffering, immediately delivering***
+    //***deliver items in buffer queue then deliver***
     private void onRecvCMT(String msg, boolean isSelf)
     {
-        //buffering part missing
-        String[] ar = parseMsg(msg);
-        if(ar.length<5 || (ar.length==5 && ar[0].equalsIgnoreCase("APP")))
+        while(this.queue.size()>0)
         {
-            System.out.println("Commit message is corrupt: "+msg);
-            return;
+            String s = this.queue.poll();
+            this.queuedTransSet.remove(s);
+            String[] ar = parseMsg(s);
+            if(ar[1].equalsIgnoreCase("NEW"))       createFile(ar[2]);
+            else if(ar[1].equalsIgnoreCase("DEL"))  deleteFile(ar[2]);        
+            else if(ar[1].equalsIgnoreCase("APP"))  appendFile(ar[2],ar[3]);        
+            else    System.out.println("Commit message is corrupt: "+msg);
+            int sID = Integer.parseInt(ar[ar.length-3]);
+            if(this.ID == sID)
+            {
+                ar[0] = "SUC";
+                Socket soc = this.clientConnections.get(ar[ar.length-4]);
+                MessageSender.sendMsg(soc,MessageSender.formatMsg(ar));
+            }
+            if(s.equals(msg))   break;
         }
-        if(ar[1].equalsIgnoreCase("NEW"))       createFile(ar[2]);
-        else if(ar[1].equalsIgnoreCase("DEL"))  deleteFile(ar[2]);        
-        else if(ar[1].equalsIgnoreCase("APP"))  appendFile(ar[2],ar[3]);        
-        else    System.out.println("Commit message is corrupt: "+msg);
     }
     
     /* Parse incoming message. */
@@ -286,16 +298,16 @@ public class Node {
     private boolean isRepeated(String msg)
     {
         String[] ar = parseMsg(msg);
-        if(ar.length<5)
+        if(ar.length<3)
         {
-            System.out.println("Corrupted proposal message: too short "+msg);
+            System.out.println("Corrupted message: too short "+msg);
             return true;
         }
         else
         {
-            if(ar.length == 5 && ar[1].equalsIgnoreCase("APP")) 
+            if(ar.length == 3 && ar[0].equalsIgnoreCase("APP")) 
             {
-                System.out.println("Corrupted proposal message: "+
+                System.out.println("Corrupted message: "+
                 "too short for appending "+msg);
                 return true;                
             }
@@ -354,9 +366,9 @@ public class Node {
                     continue;
                 }
             }
-            x = creMap.get(ar[2]);      y = delMap.get(ar[2]);
+            x = creMap.get(ar[1]);      y = delMap.get(ar[1]);
             int x1=-1,y1=-1;
-            if(ar[1].equalsIgnoreCase("NEW"))
+            if(ar[0].equalsIgnoreCase("NEW"))
             {
                 if(x==null) return false;
                 if(y==null) return true;
@@ -365,7 +377,7 @@ public class Node {
                 if(x1 > y1) return true;
             }
             
-            else if(ar[1].equalsIgnoreCase("DEL"))
+            else if(ar[0].equalsIgnoreCase("DEL"))
             {
                 if(y==null) return false; //never been deleted
                 if(x==null)
@@ -378,16 +390,16 @@ public class Node {
                 if(x1>=y1)  return false;//more creations than deletions
                 return true;
             }
-            else if(ar[1].equalsIgnoreCase("APP"))
+            else if(ar[0].equalsIgnoreCase("APP"))
             {
-                String s = appMap.get(ar[2]);
+                String s = appMap.get(ar[1]);
                 if(s==null) return false; // 1st statement being appended
-                if(s.equals(ar[3]))  return true;
+                if(s.equals(ar[2]))  return true;
                 return false;
             }
             else
             {
-                System.out.println("Corrupted proposal message "+msg);
+                System.out.println("Corrupted message "+msg);
                 return true;
             }
         } 
@@ -400,19 +412,27 @@ public class Node {
         return true;
     }
     
-    private boolean isInvalid(String msg)
+    private boolean isInvalid(String msg,List<String> li)
     {
-        if(isRepeated(msg))     return true;
         String[] ar = parseMsg(msg);
-        if((ar[1].equalsIgnoreCase("APP") ||(ar[1].equalsIgnoreCase("DEL"))) 
-        && !this.tokens.containsKey(ar[2])) 
+        if(!ar[0].equalsIgnoreCase("RED") && isRepeated(msg))
         {
-            System.out.println("Write to Client: "+
+            li.add("ERR|Error: Transaction already present in history file: "+msg);
+            return true;
+        }
+        if((ar[0].equalsIgnoreCase("APP") ||(ar[0].equalsIgnoreCase("DEL"))
+        || ar[0].equalsIgnoreCase("RED")) && !this.tokens.containsKey(ar[1])) 
+        {
+            li.add("ERR|"+
             "Error: File does not exist "+msg);
             return true;                
         }
-        if(ar[1].equalsIgnoreCase("NEW")&& this.tokens.containsKey(ar[2])) 
+        if(ar[0].equalsIgnoreCase("NEW")&& this.tokens.containsKey(ar[1])) 
+        {
+            li.add("ERR|"+
+            "Error: File already exists "+msg);            
             return true;
+        }
         return false;
     }
     
@@ -489,8 +509,8 @@ public class Node {
 
     /*
     Message Formats:
-    client to server: NEW|file name|
-    server to leader: NEW|file name|; = <MSG>
+    client to server: NEW|file name|client_name|serverID
+    server to leader: NEW|file name|client_name|serverID; = <MSG>
                       ACK|<MSG>|epoch|counter|
     leader to server: PRO|<MSG>|epoch|counter|
                       CMT|<MSG>|epoch|counter|
@@ -507,6 +527,7 @@ public class Node {
         private void handleMsg(String msg) 
         {
             String[] m = Node.this.parseMsg(msg);
+            List<String> li = new ArrayList<>();
             if(leaderID != ID && (m[0].equalsIgnoreCase("NEW") || m[0].equalsIgnoreCase("DEL") || m[0].equalsIgnoreCase("APP")))
                 Node.this.sendToNodes(m,leaderID,-2);
             
@@ -517,12 +538,15 @@ public class Node {
                     case "NEW":
                     case "DEL":
                     case "APP":
-                        Node.this.propose(m);
+                        li.clear();
+                        boolean b = Node.this.isInvalid(msg,li);
+                        if(b)   MessageSender.sendMsg(socket,li.get(0)+"|"+m[m.length-2]);
+                        else Node.this.propose(m);
                         break;
                     /* If RED is keyword, then read file. */
                     case "RED":
-                        System.out.println("\tReading file: "+m[1]);
-                        Node.this.readFile(m[1]);
+                        String ans = Node.this.readFile(m[1]);
+                        MessageSender.sendMsg(socket,ans);                            
                         break;
                     case "PRO":
                         Node.this.onRecvPropose(msg,false);
@@ -533,6 +557,10 @@ public class Node {
                     case "CMT":
                         Node.this.onRecvCMT(msg,false);
                         break;                    
+                    case "ERR":
+                        Socket s = Node.this.clientConnections.get(m[m.length-1]);
+                        MessageSender.sendMsg(s,msg);
+                        break;                        
                     case "ELE":
                         System.out.println("Received election message from: "+m[1]);
                         Thread electThread = new Thread(new ElectHandler(m));
@@ -550,9 +578,15 @@ public class Node {
                         break;
                     case "UP":
                         connID = Integer.parseInt(m[1]);
-                        if(!Node.this.connections.containsKey(connID)) {
-                            Node.this.connections.put(connID, socket);
-                            System.out.println("Added NodeID "+connID+" to connections");
+                        if(!Node.this.serverConnections.containsKey(connID)) {
+                            Node.this.serverConnections.put(connID, socket);
+                            System.out.println("Added NodeID "+connID+" to serverConnections");
+                        }
+                        break;
+                    case "CLI":
+                        if(!Node.this.clientConnections.containsKey(m[1])) {
+                            Node.this.clientConnections.put(m[1], socket);
+                            System.out.println("Added Client name "+m[1]+" to clientConnections");
                         }
                         break;
                     default:
@@ -579,8 +613,8 @@ public class Node {
                 }
                 if (connID != -1) {
                     System.out.println("LOST NODE CONNECTION TO "+Integer.toString(connID));
-                    Node.this.connections.remove(connID);
-                    System.out.println(Node.this.connections.size());
+                    Node.this.serverConnections.remove(connID);
+                    System.out.println(Node.this.serverConnections.size());
                     /* If connID == leaderID, then initiate leader election */
                     if(connID == leaderID) {
                         leaderID = -1;
@@ -622,12 +656,12 @@ public class Node {
         serverThread.start();
         for(Map.Entry<Integer, AddrPair> entry : neighbors.entrySet()) {
             if(entry.getKey() != ID) {
-                if (!connections.containsKey(entry.getKey())) {
+                if (!serverConnections.containsKey(entry.getKey())) {
                     try {
                         AddrPair loc = entry.getValue();
                         Socket sock = new Socket(loc.addr, loc.port);
-                        connections.put(entry.getKey(),sock);
-                        Thread connThread = new Thread(new ConnectHandler(connections.get(entry.getKey())));
+                        serverConnections.put(entry.getKey(),sock);
+                        Thread connThread = new Thread(new ConnectHandler(serverConnections.get(entry.getKey())));
                         connThread.start();
                     }
                     catch (IOException e) {
