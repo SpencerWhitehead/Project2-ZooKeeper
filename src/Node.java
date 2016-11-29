@@ -544,9 +544,20 @@ public class Node {
         {
             String[] m = Node.this.parseMsg(msg);
             List<String> li = new ArrayList<>();
-            if(leaderID != ID && (m[0].equalsIgnoreCase("NEW") || m[0].equalsIgnoreCase("DEL") || m[0].equalsIgnoreCase("APP")))
-                Node.this.sendToNodes(m,leaderID,-2);
-            
+            if(Node.this.leaderID != Node.this.ID && (m[0].equalsIgnoreCase("NEW") || 
+            m[0].equalsIgnoreCase("DEL") || m[0].equalsIgnoreCase("APP")))
+            {
+                
+                if(leaderID==-1 || 
+                serverConnections.size() +1 <= neighbors.size()/2)
+                {
+                    MessageSender.sendMsg(socket,
+                    "ERR|Error: Sorry Cannot process any commands right now. "+
+                    "Please try again later");
+                }
+                    
+                else    Node.this.sendToNodes(m,leaderID,-2);
+            }
             else
             {
                 switch (m[0])
@@ -554,10 +565,19 @@ public class Node {
                     case "NEW":
                     case "DEL":
                     case "APP":
-                        li.clear();
-                        boolean b = Node.this.isInvalid(msg,li);
-                        if(b)   MessageSender.sendMsg(socket,li.get(0)+"|"+m[m.length-2]);
-                        else Node.this.propose(m);
+                        if(Node.this.serverConnections.size() +1 <= Node.this.neighbors.size()/2)
+                        {
+                            MessageSender.sendMsg(socket,
+                            "ERR|Error: Sorry Cannot process any commands right now. "+
+                            "Please try again later");
+                        }                        
+                        else
+                        {
+                            li.clear();
+                            boolean b = Node.this.isInvalid(msg,li);
+                            if(b)   MessageSender.sendMsg(socket,li.get(0)+"|"+m[m.length-2]);
+                            else Node.this.propose(m);                            
+                        }
                         break;
                     /* If RED is keyword, then read file. */
                     case "RED":
