@@ -10,11 +10,13 @@ public class ClientZookeeper
 {
     public Socket soc;
     public int serverID;
+    public String name;
     
-    public ClientZookeeper(int serverID)
+    public ClientZookeeper(int serverID,String name)
     {
         this.serverID = serverID;
         this.soc = null;
+        this.name = name;
     }
     
     /* Parse configuration file with node IP addresses and ports. */
@@ -53,11 +55,6 @@ public class ClientZookeeper
                 System.exit(-1);
             }
             
-            BufferedOutputStream bos = new BufferedOutputStream(
-                this.soc.getOutputStream());
-            
-            OutputStreamWriter osw = new OutputStreamWriter(bos, "US-ASCII");                            
-            
             StringBuilder st = new StringBuilder();
             if(tokens[0].equalsIgnoreCase("create"))    st.append("NEW|");
             if(tokens[0].equalsIgnoreCase("read"))    st.append("RED|");
@@ -65,10 +62,10 @@ public class ClientZookeeper
             if(tokens[0].equalsIgnoreCase("delete"))    st.append("DEL|");
             
             st.append(tokens[1]+"|");
-            if(tokens.length > 2)   st.append(tokens[2]);
-            
-            osw.write(st.toString()+"\n");
-            osw.flush();
+            if(tokens.length > 2)   st.append(tokens[2]+"|");
+            st.append(this.name+"|");
+            st.append(this.serverID+"|");
+            MessageSender.sendMsg(this.soc,st.toString());
         } 
         catch(Exception e) 
         {
@@ -76,21 +73,25 @@ public class ClientZookeeper
         }        
     }
     
+
+    
     public static void main(String[] args)
     {
         try 
         {
-            if(args.length < 2)
+            if(args.length < 3)
             {
                 System.out.println("Error. Please provide"+ 
                 " the following command line arguments");
                 System.out.println("1. Server Node ID");
                 System.out.println("2. Configuration File Name");
+                System.out.println("3. Client Name ");
                 System.exit(-1);
             } 
             
             int id = Integer.parseInt(args[0]);
-            ClientZookeeper clZobj = new ClientZookeeper(id);
+            String name = args[2];
+            ClientZookeeper clZobj = new ClientZookeeper(id,name);
             
             HashMap<Integer, AddrPair> mapAddr = clZobj.parseConfigFile(args[1]);
             AddrPair adr = mapAddr.get(id);
