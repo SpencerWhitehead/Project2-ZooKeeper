@@ -51,6 +51,12 @@ public class Node {
     private ConcurrentSkipListSet<String> queuedTransSet = new ConcurrentSkipListSet<>();
     private ConcurrentLinkedQueue<String> queue = new ConcurrentLinkedQueue<>();
     
+    private boolean inBroadCastPhase;
+    private ConcurrentSkipListSet<Integer> histAckSet = new ConcurrentSkipListSet<>();
+    private ConcurrentSkipListSet<String> bCastTransSet = new ConcurrentSkipListSet<>();
+    private ConcurrentLinkedQueue<String> bCastq = new ConcurrentLinkedQueue<>();
+    
+    
     public Node(int port, int ident) {
         this.portNum = port;
         this.ID = ident;
@@ -61,6 +67,7 @@ public class Node {
         initSend = s.toString();
         createHistoryFile();
         elect = new Election();
+        inBroadCastPhase = false;
     }
 
     /* Create history file. */
@@ -279,7 +286,58 @@ public class Node {
             }
         }
     }
-
+    
+    private void sendHistACK()
+    {
+        System.out.println("History ack sent by "+this.ID+
+        " and leader is "+this.leaderID);
+        try 
+        {
+            while(leaderID==-1) {   Thread.sleep(50);   }    
+        } catch(InterruptedException e) 
+        {
+            System.out.println(e);
+        }
+        
+        sendToNodes("HISTACK|"+this.ID, this.leaderID, -2);
+    }
+    
+    private void sendHistCMT()
+    {
+        System.out.println("Sending out history commit" );
+        sendToNodes("HISTCMT|"+this.ID, 0, 0);
+        this.inBroadCastPhase = true;
+    }
+    
+    private void onRecvHistAck(String msg)
+    {
+        String[] ar = parseMsg(msg);
+        histAckSet.add(Integer.parseInt(ar[1]));
+        System.out.println("History ack received from "+ar[1]);
+        if(histAckSet.size() + 1 > this.neighbors.size()/2)
+        {
+            sendHistCMT();
+            onRecvHistCMT(true);        
+        }
+    }
+    
+    private void onRecvHistCMT(boolean isSelf)
+    {
+        System.out.println("Received History commit "+this.ID);
+        if(!isSelf) {   updateTokensFromHistory(); }
+        this.inBroadCastPhase = true;
+        if(isSelf)
+        {
+            System.out.println("Broadcast phase is over for leader ");
+            while(this.bCastq.size()>0) 
+            {
+                String s = this.bCastq.poll();
+                this.bCastTransSet.remove(s);
+                sendPendPropose(s);
+            }               
+        }
+    }
+    
     private synchronized void propose(String[] cts) {
         ArrayList<String> li = new ArrayList<>();
         li.add("PRO");  
@@ -287,13 +345,32 @@ public class Node {
         li.add(Integer.toString(zxid.getEpoch()));   
         li.add(Integer.toString(zxid.getCounter()));
         zxid.updateCounter();
-        System.out.println("Sending following "+
-        "proposal to all followers: " + MessageSender.formatMsg(li));
-        sendToNodes(li,0,0);
-        onRecvPropose(MessageSender.formatMsg(li),true);
+        String msg =  MessageSender.formatMsg(li);
+        if(this.inBroadCastPhase)
+        {
+            System.out.println("Sending following "+
+            "proposal to all followers: " + msg);
+            sendToNodes(li,0,0);
+            onRecvPropose(msg,true);            
+        }
+        else
+        {
+            boolean b = this.bCastTransSet.add(msg);
+            if(b){  bCastq.add(msg);    }
+        }
     }
     
-    private void onRecvPropose(String msg, boolean isSelf) {
+    private synchronized void sendPendPropose(String msg) 
+    {
+        System.out.println("Sending following "+
+        "proposal to all followers: " + msg);
+        sendToNodes(msg,0,0);
+        onRecvPropose(msg,true);            
+    }
+    
+    private void onRecvPropose(String msg, boolean isSelf) 
+    {
+        if(!this.inBroadCastPhase)   return;
         String[] ar = parseMsg(msg);
         if(!ar[0].equalsIgnoreCase("PRO"))
         {
@@ -547,9 +624,11 @@ public class Node {
         }
     }
 
-    private synchronized String formHistoryMessage() {
+    private synchronized String formHistoryMessage(boolean is2PC) {
         String line = null;
-        StringBuilder st = new StringBuilder("HIS_");
+        StringBuilder st = new StringBuilder();
+        if(is2PC)   {   st.append("HIS2PC_");    }
+        else    {   st.append("HIS_");    }
         try 
         {
             FileReader fileRd = new FileReader(this.historyFile);
@@ -571,8 +650,12 @@ public class Node {
     
     private synchronized void sendHistoryMsg(int nodeID) {
         //nodeID zero indicates send to all nodes
-        if(nodeID==0)   sendToNodes(formHistoryMessage(),nodeID,0);
-        else    sendToNodes(formHistoryMessage(),nodeID,-2);
+        if(nodeID==0)   
+        {
+            System.out.println("Sending out history message in 2 PC");
+            sendToNodes(formHistoryMessage(true),nodeID,0);
+        }
+        else    sendToNodes(formHistoryMessage(false),nodeID,-2);
         
     }
 
@@ -597,6 +680,9 @@ public class Node {
                 }
                 sendToNodes(createLeaderElectMsg("COR"), 0, -1);
                 elect.endElection();
+                sendHistoryMsg(0);
+                inBroadCastPhase = false;
+                histAckSet.clear();                
             }
             else {
 //                Thread.sleep(1500);
@@ -703,22 +789,33 @@ public class Node {
         private int connID = -1;
         public ConnectHandler(Socket sock) { socket = sock; }
 
-        private void handleHistoryMsg(String msg) {
+        private void handleHistoryMsg(String msg,boolean is2PC) 
+        {
+            Node.this.inBroadCastPhase = false;
             String[] ar = msg.split("_");
             String[] ar1 = new String[ar.length-1];
             for(int i = 1;i<ar.length;++i) { ar1[i-1] = ar[i]; }
-            Node.this.mergeHistories(ar1, true);
-            Node.this.updateTokensFromHistory();
-            
+            Node.this.mergeHistories(ar1, true); 
+            //boolean indicates brute force implementation of mergeHistory
+            if(!is2PC)
+            {
+                Node.this.updateTokensFromHistory();
+                Node.this.inBroadCastPhase = true;
+            }
+            else    {   Node.this.sendHistACK();    }
         }
-
         /* Parse and perform actions based on message. */
         private void handleMsg(String msg) {
-            if(msg.substring(0,4).equals("HIS_")) {
-                handleHistoryMsg(msg);
+            if(msg.length()>=4 && msg.substring(0,4).equals("HIS_")) 
+            {
+                handleHistoryMsg(msg,false);
                 return;
             }
-
+            if(msg.length()>=7 && msg.substring(0,7).equals("HIS2PC_")) 
+            {
+                handleHistoryMsg(msg,true);
+                return;
+            }
             String[] m = Node.this.parseMsg(msg);
             List<String> li = new ArrayList<>();
             if(Node.this.leaderID != Node.this.ID && (m[0].equalsIgnoreCase("NEW") || 
@@ -770,6 +867,12 @@ public class Node {
                     case "CMT":
                         Node.this.onRecvCMT(msg,false);
                         break;                    
+                    case "HISTACK":
+                        Node.this.onRecvHistAck(msg);
+                        break;
+                    case "HISTCMT":
+                        Node.this.onRecvHistCMT(false);
+                        break;
                     case "ERR":
                         Socket s = Node.this.clientConnections.get(m[m.length-1]);
                         MessageSender.sendMsg(s,msg);
@@ -799,7 +902,10 @@ public class Node {
                         if(!Node.this.serverConnections.containsKey(connID)) {
                             Node.this.serverConnections.put(connID, socket);
                             System.out.println("Added NodeID "+connID+" to serverConnections");
-                            if(Node.this.leaderID == Node.this.ID)  {sendHistoryMsg(connID);}
+                            if(Node.this.leaderID == Node.this.ID)  
+                            {
+                                sendHistoryMsg(connID); 
+                            }
                         }
                         break;
                     case "CLI":
